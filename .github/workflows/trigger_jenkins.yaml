@@ -14,7 +14,7 @@ jobs:
         with:
           job_name: 'releng-testing/job/ami'
           base_url: https://jenkins.scylladb.com
-          user: ${{ secrets.JENKINS_USERNAME }}
+          user: 'yaronkaikov'
           password: ${{ secrets.JENKINS_TOKEN }}
 
       - name: Notify Slack on Failure
