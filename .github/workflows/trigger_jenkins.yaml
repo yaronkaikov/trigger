@@ -1,0 +1,30 @@
+name: Trigger next gating
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  trigger-jenkins:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start Jenkins Job
+        uses: scylladb-actions/jenkins-client@v0.2.0
+        with:
+          job_name: 'releng-testing/job/ami'
+          base_url: https://jenkins.scylladb.com
+          user: ${{ secrets.JENKINS_USERNAME }}
+          password: ${{ secrets.JENKINS_TOKEN }}
+
+      - name: Notify Slack on Failure
+        if: failure()
+        run: |
+          echo "Action failed, sending Slack alert..."
+          curl -X POST -H 'Content-type: application/json' \
+            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+            --data '{
+              "channel": "#sandbox-channel",
+              "text": "🚨 @here '${{ env.JOB_NAME }}' failed to be triggered, please check https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }} for more details."
+            }' \
+            https://slack.com/api/chat.postMessage
