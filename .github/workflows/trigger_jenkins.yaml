@@ -9,10 +9,17 @@ jobs:
   trigger-jenkins:
     runs-on: ubuntu-latest
     steps:
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"
+      - name: Checkout repository
+        uses: actions/checkout@v4
       - name: Start Jenkins Job
         uses: scylladb-actions/jenkins-client@v0.2.0
         with:
           job_name: 'releng-testing/job/ami'
+          jenkins_job_parameters: '{"APP_ENV_NAME": "staging"}'
           base_url: https://jenkins.scylladb.com
           user: 'yaronkaikov'
           password: ${{ secrets.JENKINS_TOKEN }}
