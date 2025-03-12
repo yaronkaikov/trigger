@@ -41,7 +41,7 @@ def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr
         backport_pr = repo.create_pull(
             title=backport_pr_title,
             body=pr_body,
-            head=f'scylladbbot:{new_branch_name}',
+            head=f'yaronkaikov:{new_branch_name}',
             base=base_branch_name,
             draft=is_draft
         )
@@ -96,8 +96,8 @@ def get_pr_commits(repo, pr, stable_branch, start_commit=None):
 def backport(repo, pr, version, commits, backport_base_branch, is_collaborator=True):
     new_branch_name = f'backport/{pr.number}/to-{version}'
     backport_pr_title = f'[Backport {version}] {pr.title}'
-    repo_url = f'https://scylladbbot:{github_token}@github.com/{repo.full_name}.git'
-    fork_repo = f'https://scylladbbot:{github_token}@github.com/scylladbbot/{repo.name}.git'
+    repo_url = f'https://yaronkaikov:{github_token}@github.com/{repo.full_name}.git'
+    fork_repo = f'https://yaronkaikov:{github_token}@github.com/yaronkaikov/{repo.name}.git'
     with (tempfile.TemporaryDirectory() as local_repo_path):
         try:
             repo_local = Repo.clone_from(repo_url, local_repo_path, branch=backport_base_branch)
@@ -120,6 +120,7 @@ def backport(repo, pr, version, commits, backport_base_branch, is_collaborator=T
 
 
 def with_github_keyword_prefix(repo, pr):
+    print(111)
     pattern = rf"(?:fix(?:|es|ed))\s*:?\s*(?:(?:(?:{repo.full_name})?#)|https://github\.com/{repo.full_name}/issues/)(\d+)"
     match = re.findall(pattern, pr.body, re.IGNORECASE)
     if not match:
