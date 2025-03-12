@@ -69,12 +69,12 @@ jobs:
         run: |
           label_name="${{ github.event.label.name }}"
           if [[ "$label_name" == scylladbbot/backport_error ]]; then
-            echo "backport_error_label_removed=false" >> $GITHUB_OUTPUT
+            echo "backport_error_label=true" >> $GITHUB_OUTPUT
           else
-            echo "backport_error_label_removed=true" >> $GITHUB_OUTPUT
+            echo "backport_error_label=false" >> $GITHUB_OUTPUT
           fi
       - name: Run auto-backport.py when label was added
-        if: ${{ github.event_name == 'pull_request_target' && steps.check_label.outputs.backport_label == 'true' && github.event.pull_request.state == 'closed' && steps.check_backport_error_label.outputs.backport_error_label_removed == 'false' }}
+        if: ${{ github.event_name == 'pull_request_target' && steps.check_label.outputs.backport_label == 'true' && github.event.pull_request.state == 'closed' && steps.check_backport_error_label.outputs.backport_error_label == 'false' }}
         env:
           GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
         run: python .github/scripts/auto-backport.py --repo ${{ github.repository }} --base-branch ${{ github.ref }} --pull-request ${{ github.event.pull_request.number }} --head-commit ${{ github.event.pull_request.base.sha }}
