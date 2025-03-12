@@ -70,27 +70,27 @@ set_jenkins_job() {
   esac
 }
 
-check_jenkins_job_status() {
-  set_jenkins_job
+#check_jenkins_job_status() {
+#  set_jenkins_job
+#
+#  lastCompletedJobName="$jenkins_url/job/$jenkins_job/lastCompletedBuild"
+#  getBuildResult=$(curl -s --user $JENKINS_USERNAME:$JENKINS_API_TOKEN $lastCompletedJobName/api/json?tree=result)
+#  if [[ "$getBuildResult" == "*Unauthorized*" ]]; then
+#      echo -e "${ORANGE}WARNING:${NC} Failed to authenticate with Jenkins. please check your JENKINS_USERNAME and JENKINS_API_TOKEN setting"
+#      exit 1
+#  fi
+#  lastCompleted=$(echo "$getBuildResult" | jq -r '.result')
+#
+#  if [[ "$lastCompleted" == "SUCCESS" ]]; then
+#      echo "$lastCompletedJobName is stable"
+#  else
+#    echo -e "${ORANGE}WARNING:${NC} $lastCompletedJobName is not stable"
+#  fi
+#}
 
-  lastCompletedJobName="$jenkins_url/job/$jenkins_job/lastCompletedBuild"
-  getBuildResult=$(curl -s --user $JENKINS_USERNAME:$JENKINS_API_TOKEN $lastCompletedJobName/api/json?tree=result)
-  if [[ "$getBuildResult" == "*Unauthorized*" ]]; then
-      echo -e "${ORANGE}WARNING:${NC} Failed to authenticate with Jenkins. please check your JENKINS_USERNAME and JENKINS_API_TOKEN setting"
-      exit 1
-  fi
-  lastCompleted=$(echo "$getBuildResult" | jq -r '.result')
-
-  if [[ "$lastCompleted" == "SUCCESS" ]]; then
-      echo "$lastCompletedJobName is stable"
-  else
-    echo -e "${ORANGE}WARNING:${NC} $lastCompletedJobName is not stable"
-  fi
-}
-
-if [[ "$FORCE" != "--force" ]]; then
-  check_jenkins_job_status
-fi
+#if [[ "$FORCE" != "--force" ]]; then
+#  check_jenkins_job_status
+#fi
 
 NL=$'\n'
 
