@@ -120,7 +120,6 @@ def backport(repo, pr, version, commits, backport_base_branch, is_collaborator=T
 
 
 def with_github_keyword_prefix(repo, pr):
-    print(111)
     pattern = rf"(?:fix(?:|es|ed))\s*:?\s*(?:(?:(?:{repo.full_name})?#)|https://github\.com/{repo.full_name}/issues/)(\d+)"
     match = re.findall(pattern, pr.body, re.IGNORECASE)
     if not match:
@@ -186,7 +185,7 @@ def main():
         if not backport_labels:
             print(f'no backport label: {pr.number}')
             continue
-        if args.commits and not with_github_keyword_prefix(repo, pr):
+        if not with_github_keyword_prefix(repo, pr):
             continue
         if not repo.private and not scylladbbot_repo.has_in_collaborators(pr.user.login):
             logging.info(f"Sending an invite to {pr.user.login} to become a collaborator to {scylladbbot_repo.full_name} ")
@@ -197,8 +196,9 @@ def main():
             pr.create_issue_comment(comment)
             is_collaborator = False
         commits = get_pr_commits(repo, pr, stable_branch, start_commit)
+        labels += [label.name for label in pr.labels]
         logging.info(f"Found PR #{pr.number} with commit {commits} and the following labels: {backport_labels}")
-        if 'scylladbbot/backport_error' not in pr.get_labels():
+        if 'scylladbbot/backport_error' not in labels:
             for backport_label in backport_labels:
                 version = backport_label.replace('backport/', '')
                 backport_base_branch = backport_label.replace('backport/', backport_branch)
