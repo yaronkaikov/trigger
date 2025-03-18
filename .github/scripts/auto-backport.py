@@ -33,7 +33,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr_title, commits, is_draft=False, is_collaborator=True):
+def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr_title, commits, is_draft, is_collaborator):
     pr_body = f'{pr.body}\n\n'
     for commit in commits:
         pr_body += f'- (cherry picked from commit {commit})\n\n'
@@ -180,9 +180,9 @@ def main():
         if not backport_labels:
             print(f'no backport label: {pr.number}')
             continue
-        if not with_github_keyword_prefix(repo, pr) and 'unlabeled' not in args.github_event:
+        if not with_github_keyword_prefix(repo, pr) and args.github_event != 'unlabeled':
             comment = f''':warning:  @{pr.user.login} PR body or PR commits do not contain a Fixes reference to an issue and can not be backported
-            please update commit message or PR body with a valid ref to an issue. Then remove `scylladbbot/backport_error` label to re-trigger the backport process
+            please update PR body with a valid ref to an issue. Then remove `scylladbbot/backport_error` label to re-trigger the backport process
             '''
             pr.create_issue_comment(comment)
             pr.add_to_labels("scylladbbot/backport_error")
@@ -202,13 +202,11 @@ def main():
             pr.create_issue_comment(comment)
             is_collaborator = False
         commits = get_pr_commits(repo, pr, stable_branch, start_commit)
-        labels += [label.name for label in pr.labels]
         logging.info(f"Found PR #{pr.number} with commit {commits} and the following labels: {backport_labels}")
-        if 'scylladbbot/backport_error' not in labels:
-            for backport_label in backport_labels:
-                version = backport_label.replace('backport/', '')
-                backport_base_branch = backport_label.replace('backport/', backport_branch)
-                backport(repo, pr, version, commits, backport_base_branch, is_collaborator)
+        for backport_label in backport_labels:
+            version = backport_label.replace('backport/', '')
+            backport_base_branch = backport_label.replace('backport/', backport_branch)
+            backport(repo, pr, version, commits, backport_base_branch, is_collaborator)
 
 
 if __name__ == "__main__":

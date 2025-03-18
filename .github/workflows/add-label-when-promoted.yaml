@@ -60,7 +60,7 @@ jobs:
           echo "Checking labels: $(echo "$labels_json" | jq -r '.[].name')"
 
           # Check if a valid backport label exists
-          if echo "$labels_json" | jq -e '.[] | select(.name | test("^backport/[0-9]+\\.[0-9]+$"))' > /dev/null; then
+          if echo "$labels_json" | jq -e 'any(.[] | .name; test("backport/[0-9]+\\.[0-9]+$"))' > /dev/null; then
             # Ensure scylladbbot/backport_error is NOT present
             if ! echo "$labels_json" | jq -e '.[] | select(.name == "scylladbbot/backport_error")' > /dev/null; then
               echo "A matching backport label was found and no backport_error label exists."
