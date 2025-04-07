@@ -1,4 +1,28 @@
 1
 sdkl
 sdjka
+<<<<<<< HEAD
 233
+||||||| parent of abdf086 (test2)
+2s
+
+das
+das
+da
+d
+asd
+33
+=======
+2s
+
+das
+das
+da
+d
+asd
+3ksjdkas
+djaksdjas
+dksajdksa
+dkjsakdas
+3
+>>>>>>> abdf086 (test2)
