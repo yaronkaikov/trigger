@@ -1,14 +1,13 @@
 name: PR Conflict Notifier
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened, labeled]
   schedule:
     - cron: '0 0 */3 * *'  # Runs every 3 days at midnight UTC
 
-
 jobs:
-  debug:
+  test1:
     runs-on: ubuntu-latest
     steps:
       - name: Dump GitHub context
