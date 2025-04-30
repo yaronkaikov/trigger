@@ -1,1 +1,17 @@
+<<<<<<< HEAD
 jdlaskjdals
+||||||| parent of 5d01ae0 (update)
+=======
+1kslda
+
+sdkl
+sdjka
+2s
+
+das
+das
+da
+d
+asd
+33
+>>>>>>> 5d01ae0 (update)
