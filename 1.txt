@@ -1,3 +1,49 @@
+<<<<<<< HEAD
+||||||| parent of 6347edb (wip)
+<<<<dddsdkjas<<< HEAD
+1sds
+sdkl
+||||||| 30da8d2
+1
+sdkl
+=======
+>>>>>>> test4
+<<<<<<< HEAD
+2sdsadsakdjklsakjdlsads
+||||||| 0797690
+sdjka
+2s
+=======
+sskdjalsjdkalsjlskdjlaskjdlas
+dkjasld
+kdjasl
+djka
+2s
+>>>>>>> test3
+
+=======
+<<<<dddsdkjaakjsldals<<< HEAD
+1sds
+sdkl
+||||||| 30da8d2
+1
+sdkl
+=======
+>>>>>>> test4
+<<<<<<< HEAD
+2sdsadsakdjklsakjdlsads
+||||||| 0797690
+sdjka
+2s
+=======
+sskdjalsjdkalsjlskdjlaskjdlas
+dkjasld
+kdjasl
+djka
+2s
+>>>>>>> test3
+
+>>>>>>> 6347edb (wip)
 dlskdl;as
 skajdasl
 ksjdksa

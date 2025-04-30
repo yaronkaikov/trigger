@@ -31,7 +31,6 @@ jobs:
           else
             echo "has_conflicts=false" >> $GITHUB_OUTPUT
           fi
-          git merge --abort || true
 
       - name: Add conflict label
         if: steps.conflict-check.outputs.has_conflicts == 'true'
