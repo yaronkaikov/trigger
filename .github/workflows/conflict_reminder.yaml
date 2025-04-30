@@ -1,7 +1,7 @@
 name: PR Conflict Notifier
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened, labeled]
   schedule:
     - cron: '0 0 */3 * *'  # Runs every 3 days at midnight UTC
