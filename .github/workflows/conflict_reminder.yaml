@@ -6,9 +6,8 @@ on:
   schedule:
     - cron: '0 0 */3 * *'  # Runs every 3 days at midnight UTC
 
-
 jobs:
-  debug:
+  test1:
     runs-on: ubuntu-latest
     steps:
       - name: Dump GitHub context
