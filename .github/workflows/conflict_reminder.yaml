@@ -6,14 +6,15 @@ on:
   schedule:
     - cron: '0 0 */3 * *'  # Runs every 3 days at midnight UTC
 
-debug:
-  runs-on: ubuntu-latest
-  steps:
-    - name: Dump GitHub context
-      env:
-        GITHUB_CONTEXT: ${{ toJson(github) }}
-      run: echo "$GITHUB_CONTEXT"
+
 jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"
   check-conflicts:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
