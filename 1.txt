@@ -1,6 +1,17 @@
 1
 sdkl
+<<<<<<< HEAD
 2sdsadsakdjklsakjdlsads
+||||||| 0797690
+sdjka
+2s
+=======
+sskdjalsjdkalsjlskdjlaskjdlas
+dkjasld
+kdjasl
+djka
+2s
+>>>>>>> test3
 
 dlskdl;as
 skajdasl
