@@ -19,113 +19,42 @@ jobs:
       - name: Check for merge conflicts
         id: conflict-check
         run: |
-          echo "Checking for conflicts between HEAD and ${{ github.base_ref }}"
-          git fetch origin ${{ github.base_ref }}
-          merge_result=$(git merge origin/${{ github.base_ref }} --no-commit --no-ff 2>&1 || true)
-          echo "Merge result: $merge_result"
-          if echo "$merge_result" | grep -q "CONFLICT"; then
+          pr_status=$(gh pr view ${{ event.number }} --repo ${{event.base.repo.full_name }} --json mergeable)
+          echo "PR ${{ event.number }} status: $pr_status"
+          if echo "$pr_status" | grep -q "CONFLICTING"; then
             echo "Merge conflicts detected"
             echo "has_conflicts=true" >> $GITHUB_OUTPUT
           else
             echo "No merge conflicts detected"
             echo "has_conflicts=false" >> $GITHUB_OUTPUT
           fi
-          git merge --abort || true
-        continue-on-error: true  # Prevent job from failing on merge errors
-
-      - name: Debug conflict check output
-        run: |
-          echo "Conflict check output: ${{ steps.conflict-check.outputs.has_conflicts }}"
 
       - name: Add conflict label
         if: steps.conflict-check.outputs.has_conflicts == 'true'
-        uses: actions/github-script@v7
+        run: |
+          gh pr edit --add-label conflicts ${{ event.number }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { owner, repo, number } = context.issue;
-            console.log(`Adding 'conflict' label to PR #${number}`);
-            try {
-              await github.rest.issues.addLabels({
-                owner,
-                repo,
-                issue_number: number,
-                labels: ['conflict']
-              });
-              console.log('Label added successfully');
-            } catch (error) {
-              console.error('Error adding label:', error);
-              throw error;
-            }
 
       - name: Notify PR author
         if: steps.conflict-check.outputs.has_conflicts == 'true'
-        uses: actions/github-script@v7
+        run: |
+          gh pr comment ${{ event.number }} -b "@${{ event.actor }}, this pull request has merge conflicts with the base branch (\`${{ github.base_ref }}\`). Please resolve the conflicts and remove the \`conflict label\` to proceed with the merge."
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { owner, repo, number } = context.issue;
-            console.log(`Notifying PR #${number} author`);
-            const comment = `⚠️ **Merge Conflict Detected**
-
-            @${context.actor}, this pull request has merge conflicts with the base branch (\`${{ github.base_ref }}\`). Please resolve the conflicts to proceed with the merge.`;
-            try {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number: number,
-                body: comment
-              });
-              console.log('Comment posted successfully');
-            } catch (error) {
-              console.error('Error posting comment:', error);
-              throw error;
-            }
 
   remind-conflicts:
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule'
     steps:
       - name: Get PRs with conflict label
-        uses: actions/github-script@v7
-        id: get-prs
+        run: |
+          for i in $(gh pr list -l conflicts --json number | jq '.[].number'); do 
+            gh pr comment $i -b "@${{ event.actor }}, this is a reminder for merging conflicts in this pull request. Please resolve the conflicts and remove the \`conflict label\` to proceed with the merge."
+          done
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            console.log('Fetching PRs with conflict label');
-            const prs = await github.paginate(github.rest.issues.listForRepo, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'conflict'
-            });
-            console.log(`Found ${prs.length} PRs with conflict label`);
-            return JSON.stringify(prs);
 
-      - name: Send reminder for PRs with conflicts
-        if: steps.get-prs.outputs.result != '[]'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const prs = JSON.parse('${{ steps.get-prs.outputs.result }}');
-            for (const pr of prs) {
-              console.log(`Sending reminder for PR #${pr.number}`);
-              const comment = `⏰ **Reminder: Merge Conflict**
-
-              @${pr.user.login}, this pull request (#${pr.number}) still has unresolved merge conflicts. Please resolve them to proceed with the merge.`;
-              try {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: pr.number,
-                  body: comment
-                });
-                console.log(`Reminder sent for PR #${pr.number}`);
-              } catch (error) {
-                console.error(`Error sending reminder for PR #${pr.number}:`, error);
-              }
-            }
 
 permissions:
   issues: write
