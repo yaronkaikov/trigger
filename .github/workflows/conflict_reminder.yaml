@@ -6,6 +6,9 @@ on:
   schedule:
     - cron: '0 0 */3 * *'  # Runs every 3 days at midnight UTC
 
+env:
+    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 jobs:
   check-conflicts:
     runs-on: ubuntu-latest
