@@ -1,7 +1,23 @@
+<<<<<<< HEAD
 <<<<<<< HEAdds
 ss
 S
 
 das
+||||||| 47f7b57
+<<<<<<< HEAdds
+ss
+S
+dkjfdslkfjsdlf
+
+das
+das
+da
+d
+asd
+=======
+da
+d
+asd
+>>>>>>> test8
 33
->>>>>>> 5d01ae0 (update)

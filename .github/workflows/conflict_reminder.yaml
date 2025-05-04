@@ -40,7 +40,7 @@ jobs:
       - name: Notify PR author
         if: steps.conflict-check.outputs.has_conflicts == 'true'
         run: |
-          gh pr comment ${{ github.event.number }} -b "@${{ github.event.actor }}, this pull request has merge conflicts with the base branch (\`${{ github.base_ref }}\`). Please resolve the conflicts and remove the \`conflict label\` to proceed with the merge."
+          gh pr comment ${{ github.event.number }} -b "@${{ github.actor }}, this pull request has merge conflicts with the base branch (\`${{ github.base_ref }}\`). Please resolve the conflicts and remove the \`conflict\' label to proceed with the merge."
 
   remind-conflicts:
     runs-on: ubuntu-latest
@@ -49,7 +49,7 @@ jobs:
       - name: Get PRs with conflict label
         run: |
           for i in $(gh pr list -l conflicts --json number | jq '.[].number'); do 
-            gh pr comment $i -b "@${{ github.event.actor }}, this is a reminder for merging conflicts in this pull request. Please resolve the conflicts and remove the \`conflict label\` to proceed with the merge."
+            gh pr comment $i -b "@${{ github.actor }}, this is a reminder for merging conflicts in this pull request. Please resolve the conflicts and remove the \`conflict\' label to proceed with the merge."
           done
 
 permissions:
