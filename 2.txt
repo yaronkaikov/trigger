@@ -1,4 +1,17 @@
+<<<<<<< HEAD
 da
 dsda
 ds
 d
+||||||| parent of e5294b6 (wip)
+sjdkasd
+aksjdlas
+
+=======
+sjdkasd
+aksjdlas
+sdasda
+asdasd
+asdas
+
+>>>>>>> e5294b6 (wip)
