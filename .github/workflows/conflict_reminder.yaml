@@ -19,7 +19,7 @@ jobs:
       - name: Check for merge conflicts
         id: conflict-check
         run: |
-          pr_status=$(gh pr view ${{ github.event.number }} --repo ${{ github.event.base.repo.full_name }} --json mergeable)
+          pr_status=$(gh pr view ${{ github.event.number }} --repo ${{ github.repository }} --json mergeable)
           echo "PR ${{ github.event.number }} status: $pr_status"
           if echo "$pr_status" | grep -q "CONFLICTING"; then
             echo "Merge conflicts detected"
@@ -33,15 +33,11 @@ jobs:
         if: steps.conflict-check.outputs.has_conflicts == 'true'
         run: |
           gh pr edit --add-label conflicts ${{ github.event.number }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Notify PR author
         if: steps.conflict-check.outputs.has_conflicts == 'true'
         run: |
           gh pr comment ${{ github.event.number }} -b "@${{ github.event.actor }}, this pull request has merge conflicts with the base branch (\`${{ github.base_ref }}\`). Please resolve the conflicts and remove the \`conflict label\` to proceed with the merge."
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
   remind-conflicts:
     runs-on: ubuntu-latest
@@ -52,9 +48,6 @@ jobs:
           for i in $(gh pr list -l conflicts --json number | jq '.[].number'); do 
             gh pr comment $i -b "@${{ github.event.actor }}, this is a reminder for merging conflicts in this pull request. Please resolve the conflicts and remove the \`conflict label\` to proceed with the merge."
           done
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
 
 permissions:
   issues: write
