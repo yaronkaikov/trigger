@@ -1,7 +1,9 @@
+<<<<<<< HEAD
 d
 l;sdfsd
 kdsjfl;sd
 dlfkjsd;
+<<<<<<< HEAD
 sddasdas
 dasdas
 da
@@ -11,6 +13,35 @@ das
 d
 asd
 as
+||||||| parent of b17952a (wip)
+
+=======
+||||||| parent of c7e42a2 (wip)
+kjkldsajlda
+dksjaldas
+<<<<<<< HEAD
+<<<<<<< HEAddasldhsajl\
+ds
+ss
+<<<<<<< HEAD
+||||||| parent of ab1a0bc (wip)
+S
+=======
+kjkldsajlda
+dksjaldas
+dsaddsada
+dsadas
+dasdsa
+<<<<<< HEAD
+<<<<<<< HEAddasldhsajl\
+ds
+ss
+<<<<<<< HEAD
+||||||| parent of ab1a0bc (wip)
+S
+>>>>>>> c7e42a2 (wip)
+
+>>>>>>> b17952a (wip)
 das
 ||||||| 47f7b57
 <<<<<<< HEAdds
