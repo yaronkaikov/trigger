@@ -1,6 +1,21 @@
 <<<<<<< HEAD
 <<<<<<< HEAdds
 ss
+<<<<<<< HEAD
+||||||| parent of ab1a0bc (wip)
+S
+
+das
+||||||| 47f7b57
+<<<<<<< HEAdds
+ss
+S
+dkjfdslkfjsdlf
+=======
+S
+S
+dkjfdslkfjsdlf
+>>>>>>> ab1a0bc (wip)
 
 jkldjsakdjasdkjsa
 das
