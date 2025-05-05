@@ -1,7 +1,7 @@
 name: PR Conflict Notifier
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened, labeled]
     branches:
       - master
@@ -22,7 +22,7 @@ jobs:
         run: echo "$GITHUB_CONTEXT"
   check-conflicts:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request_target'
+    if: github.event_name == 'pull_request'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
