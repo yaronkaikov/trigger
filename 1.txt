@@ -1,10 +1,26 @@
 d
 l;sdfsd
+<<<<<<< Updated upstream
 kdsjfl;sd
 dlfkjsd;
 sddasdas
 dasdas
 da
+||||||| Stash base
+kdsjfl;sd
+dlfkjsd;
+<<<<<<< HEAD
+sddasdas
+dasdas
+da
+=======
+kddsjfl;sd
+dldfkjsd;
+<<<d<<<< HEAD
+sddadsdas
+dasdads
+dad
+>>>>>>> Stashed changes
 sdas
 das
 das
