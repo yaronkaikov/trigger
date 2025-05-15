@@ -1,9 +1,12 @@
 name: Notify PR Authors of Conflicts
 
 on:
+  push:
+    branches:
+      - 'branch-*'  # Trigger on pushes to branches with the prefix 'branch-'
+      - 'master'
   schedule:
     - cron: '0 10 * * 1,4'  # Runs every Monday and Thursday at 10:00am
-  workflow_dispatch:      # Manual trigger for testing
 
 jobs:
   notify_conflict_prs:
