@@ -1,68 +1,65 @@
-name: PR Conflict Notifier
+name: Notify PR Authors of Conflicts
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, labeled]
-    branches:
-      - master
-      - branch-*.*
   schedule:
-    - cron: '0 0 */3 * *'  # Runs every 3 days at midnight UTC
-
-env:
-    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - cron: '0 10 * * 1,4'  # Runs every Monday and Thursday at 10:00am
+  workflow_dispatch:      # Manual trigger for testing
 
 jobs:
-  debug:
+  notify_conflict_prs:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Dump GitHub context
-        env:
-          GITHUB_CONTEXT: ${{ toJson(github) }}
-        run: echo "$GITHUB_CONTEXT"
-  check-conflicts:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Notify PR Authors of Conflicts
+        uses: actions/github-script@v7
         with:
-          fetch-depth: 0  # Fetch all history for accurate merge checks
+          script: |
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100
+            });
+            const branchPrefix = 'branch-';
+            const threeDaysAgo = new Date();
+            const conflictLabel = 'conflicts';
+            threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
 
-      - name: Check for merge conflicts
-        id: conflict-check
-        run: |
-          pr_status=$(gh pr view ${{ github.event.number }} --repo ${{ github.repository }} --json mergeable)
-          echo "PR ${{ github.event.number }} status: $pr_status"
-          if echo "$pr_status" | grep -q "CONFLICTING"; then
-            echo "Merge conflicts detected"
-            echo "has_conflicts=true" >> $GITHUB_OUTPUT
-          else
-            echo "No merge conflicts detected"
-            echo "has_conflicts=false" >> $GITHUB_OUTPUT
-          fi
+            for (const pr of prs) {
+              if (!pr.base.ref.startsWith(branchPrefix)) continue;
+              const updatedDate = new Date(pr.updated_at);
+              if (updatedDate >= threeDaysAgo) continue;
+              if (pr.assignee === null) continue;
 
-      - name: Add conflict label
-        if: steps.conflict-check.outputs.has_conflicts == 'true'
-        run: |
-          gh pr edit --add-label conflicts ${{ github.event.number }}
+              // Fetch PR details to check mergeability
+              const { data: prDetails } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+              });
 
-      - name: Notify PR author
-        if: steps.conflict-check.outputs.has_conflicts == 'true'
-        run: |
-          gh pr comment ${{ github.event.number }} -b "@${{ github.actor }}, this pull request has merge conflicts with the base branch (\`${{ github.base_ref }}\`). Please resolve the conflicts and remove the \`conflict\' label to proceed with the merge."
-
-  remind-conflicts:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'
-    steps:
-      - name: Get PRs with conflict label
-        run: |
-          for i in $(gh pr list -l conflicts --json number | jq '.[].number'); do 
-            gh pr comment $i -b "@${{ github.actor }}, this is a reminder for merging conflicts in this pull request. Please resolve the conflicts and remove the \`conflict\` label to proceed with the merge."
-          done
-
-permissions:
-  issues: write
-  pull-requests: write
-  contents: read
+              if (prDetails.mergeable === false) {
+                // Add conflicts label if not present
+                const hasConflictLabel = pr.labels.some(label => label.name === conflictLabel);
+                if (!hasConflictLabel) {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pr.number,
+                    labels: [conflictLabel],
+                  });
+                  console.log(`Added 'conflicts' label to PR #${pr.number}`);
+                }
+                const assignee = pr.assignee.login;
+                if (assignee) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pr.number,
+                    body: `@${assignee}, this PR has merge conflicts with the base branch. Please resolve the conflicts so we can merge it.`,
+                  });
+                  console.log(`Notified @${assignee} for PR #${pr.number}`);
+                }
+              }
+            }
+            console.log(`Total PRs checked: ${prs.length}`);
