@@ -1,6 +1,4 @@
 d
-l;sdfsd
-<<<<<<< Updated upstream
 kdsjfl;sd
 dlfkjsd;
 sddasdas
@@ -17,14 +15,8 @@ da
 kddsjfl;sd
 dldfkjsd;
 <<<d<<<< HEAD
-sddadsdas
 dasdads
-dad
 >>>>>>> Stashed changes
-sdas
-das
-das
-d
 asd
 as
 das
