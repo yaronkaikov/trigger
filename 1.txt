@@ -21,21 +21,7 @@ sddadsdas
 dasdads
 dad
 >>>>>>> Stashed changes
-sdas
 das
-das
-d
-asd
-as
-das
-||||||| 47f7b57
-<<<<<<< HEAdds
-ss
-S
-dkjfdslkfjsdlf
-=======
-S
-S
 dkjfdslkfjsdlf
 >>>>>>> ab1a0bc (wip)
 
