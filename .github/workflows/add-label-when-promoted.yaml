@@ -1,0 +1,84 @@
+name: Check if commits are promoted
+
+on:
+  push:
+    branches:
+      - master
+      - next-*.*
+  pull_request_target:
+    types: [labeled]
+    branches: [master, next]
+
+env:
+  DEFAULT_BRANCH: 'master'
+
+jobs:
+  check-commit:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ env.DEFAULT_BRANCH }}
+          token: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+          fetch-depth: 0  # Fetch all history for all tags and branches
+      - name: Set up Git identity
+        run: |
+          git config --global user.name "scylladbbot"
+          git config --global user.email "scylladbbot@scylladb.com"
+          git config --global merge.conflictstyle diff3
+      - name: Install dependencies
+        run: sudo apt-get install -y python3-github python3-git
+      - name: Run python script
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+        run: python .github/scripts/search_commits.py  --commits ${{ github.event.before }}..${{ github.sha }} --repository ${{ github.repository }} --ref ${{ github.ref }}
+      - name: Run auto-backport.py when promotion completed
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', env.DEFAULT_BRANCH)
+        env:
+          GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+        run: python .github/scripts/auto-backport.py --repo ${{ github.repository }} --base-branch ${{ github.ref }} --commits ${{ github.event.before }}..${{ github.sha }}
+      - name: Check if label starts with 'backport/' and contains digits
+        id: check_label
+        run: |
+          label_name="${{ github.event.label.name }}"
+          if [[ "$label_name" =~ ^backport/[0-9]+\.[0-9]+$ ]]; then
+            echo "Label matches backport/X.X pattern."
+            echo "backport_label=true" >> $GITHUB_OUTPUT
+          else
+            echo "Label does not match the required pattern."
+            echo "backport_label=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Log backport label processing order
+        run: |
+          echo "Backport labels on this PR:"
+          gh pr view ${{ github.event.pull_request.number }} --json labels -q ".labels[].name" | grep '^backport/' | sort -Vr
+          echo "Only the highest version backport label will be processed by the script."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run auto-backport.py when label was added
+        if: github.event_name == 'pull_request_target' && steps.check_label.outputs.backport_label == 'true' && github.event.pull_request.state == 'closed'
+        env:
+          GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+        run: python .github/scripts/auto-backport.py --repo ${{ github.repository }} --base-branch ${{ github.ref }} --pull-request ${{ github.event.pull_request.number }} --head-commit ${{ github.event.pull_request.base.sha }} --label ${{ github.event.label.name }}
+      - name: Remove backport label after promotion
+        if: startsWith(github.ref, 'refs/heads/branch-')
+        env:
+          GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+        run: |
+          version="${GITHUB_REF#refs/heads/branch-}"
+          label="backport/$version"
+          # Find PRs merged into this branch in the last 20 commits (adjust as needed)
+          for pr in $(gh pr list --state merged --base "branch-$version" --json number --jq '.[].number' | tail -n 20); do
+            echo "Removing label $label from PR #$pr"
+            gh pr edit "$pr" --remove-label "$label" || true
+          done
