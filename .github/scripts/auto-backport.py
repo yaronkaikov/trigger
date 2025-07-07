@@ -96,7 +96,7 @@ def backport(repo, pr, version, commits, backport_base_branch):
     new_branch_name = f'backport/{pr.number}/to-{version}'
     backport_pr_title = f'[Backport {version}] {pr.title}'
     repo_url = f'https://yaronkaikov:{github_token}@github.com/{repo.full_name}.git'
-    fork_repo = f'https://yaronkaikov:{github_token}@github.com/scylladbbot/{repo.name}.git'
+    fork_repo = f'https://yaronkaikov:{github_token}@github.com/yaronkaikov/{repo.name}.git'
     with (tempfile.TemporaryDirectory() as local_repo_path):
         try:
             repo_local = Repo.clone_from(repo_url, local_repo_path, branch=backport_base_branch)
