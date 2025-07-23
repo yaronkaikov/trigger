@@ -71,6 +71,16 @@ def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr
                 except GithubException as e:
                     logging.warning(f"Failed to add label {label}: {e}")
         
+        # Add version-specific promotion label for cascading backports
+        # For backport PRs, add promoted-to-{version} instead of promoted-to-master
+        if current_version:
+            version_promotion_label = f"promoted-to-{current_version}"
+            try:
+                backport_pr.add_to_labels(version_promotion_label)
+                logging.info(f"Added {version_promotion_label} label to backport PR #{backport_pr.number}")
+            except GithubException as e:
+                logging.warning(f"Failed to add {version_promotion_label} label: {e}")
+        
         if is_draft:
             backport_pr.add_to_labels("conflicts")
             pr_comment = f"@{pr.user.login} - This PR has conflicts, therefore it was moved to `draft` \n"
@@ -210,8 +220,27 @@ def main():
                 backport_labels = [args.label]
         else:
             backport_labels = [label for label in labels if backport_label_pattern.match(label)]
-        if promoted_label not in labels:
-            print(f'no {promoted_label} label: {pr.number}')
+        
+        # Check if this is a backport PR by looking at the title pattern
+        is_backport_pr = pr.title.startswith('[Backport ') and '] ' in pr.title
+        
+        # For backport PRs, look for version-specific promotion labels
+        # For original PRs, look for the standard promoted-to-master label
+        has_promotion_label = False
+        if is_backport_pr:
+            # Extract version from title and look for promoted-to-{version} label
+            title_match = re.search(r'\[Backport ([^\]]+)\]', pr.title)
+            if title_match:
+                backport_version = title_match.group(1)
+                version_promotion_label = f"promoted-to-{backport_version}"
+                has_promotion_label = version_promotion_label in labels
+                logging.info(f"Looking for {version_promotion_label} label on backport PR #{pr.number}: {'found' if has_promotion_label else 'not found'}")
+        else:
+            # Original PR - look for promoted-to-master
+            has_promotion_label = promoted_label in labels
+        
+        if not has_promotion_label:
+            print(f'no promotion label: {pr.number}')
             continue
         if not backport_labels:
             print(f'no backport label: {pr.number}')
@@ -219,9 +248,6 @@ def main():
         
         commits = get_pr_commits(repo, pr, stable_branch, start_commit)
         logging.info(f"Found PR #{pr.number} with commit {commits} and the following labels: {backport_labels}")
-        
-        # Check if this is a backport PR by looking at the title pattern
-        is_backport_pr = pr.title.startswith('[Backport ') and '] ' in pr.title
         
         if is_backport_pr:
             # Extract the version from the title: "[Backport 2025.3] Some title"
