@@ -34,10 +34,13 @@ Again another test
 Second test now
 And again
 <<<<<<< HEAD
+<<<<<<< HEAD
 Third t
 ldka;dklsakdlsa;
 kjkldsfj
 ime now
 =======
+=======
+>>>>>>> 45041bb (wip)
 Third time now
 >>>>>>> 45041bb (wip)
