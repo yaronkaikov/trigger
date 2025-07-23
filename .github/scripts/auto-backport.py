@@ -202,7 +202,12 @@ def main():
     for pr in closed_prs:
         labels = [label.name for label in pr.labels]
         if args.pull_request:
-            backport_labels = [args.label]
+            # For --pull-request mode, get all backport labels from the actual PR
+            # instead of just using the single --label argument
+            backport_labels = [label for label in labels if backport_label_pattern.match(label)]
+            # If no backport labels found on PR, fall back to the --label argument
+            if not backport_labels and args.label:
+                backport_labels = [args.label]
         else:
             backport_labels = [label for label in labels if backport_label_pattern.match(label)]
         if promoted_label not in labels:
