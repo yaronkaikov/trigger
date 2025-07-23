@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
 
+"""
+Auto-backport script for ScyllaDB
+
+This script implements cascading backports to reduce merge conflicts:
+- When a PR has multiple backport labels (e.g., backport/2025.3, backport/2025.2, backport/2025.1)
+- Only the newest version (2025.3) backport PR is created initially
+- The remaining backport labels (2025.2, 2025.1) are added to the new backport PR
+- When the newest backport PR is promoted, the process repeats for the next version
+- This ensures backports cascade from newer to older releases, minimizing conflicts
+- When a backport PR is successfully promoted/merged, a "done" label (e.g., backport/2025.3-done) 
+  is automatically added to the original PR to track completion status
+"""
+
 import argparse
 import os
 import re
@@ -33,7 +46,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr_title, commits, is_draft=False):
+def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr_title, commits, remaining_backport_labels=None, current_version=None, is_draft=False):
     pr_body = f'{pr.body}\n\n'
     for commit in commits:
         pr_body += f'- (cherry picked from commit {commit})\n\n'
@@ -48,6 +61,16 @@ def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr
         )
         logging.info(f"Pull request created: {backport_pr.html_url}")
         backport_pr.add_to_assignees(pr.user)
+        
+        # Add remaining backport labels to the new PR for cascading backports
+        if remaining_backport_labels:
+            for label in remaining_backport_labels:
+                try:
+                    backport_pr.add_to_labels(label)
+                    logging.info(f"Added label {label} to backport PR #{backport_pr.number}")
+                except GithubException as e:
+                    logging.warning(f"Failed to add label {label}: {e}")
+        
         if is_draft:
             backport_pr.add_to_labels("conflicts")
             pr_comment = f"@{pr.user.login} - This PR has conflicts, therefore it was moved to `draft` \n"
@@ -92,7 +115,7 @@ def get_pr_commits(repo, pr, stable_branch, start_commit=None):
     return commits
 
 
-def backport(repo, pr, version, commits, backport_base_branch):
+def backport(repo, pr, version, commits, backport_base_branch, remaining_backport_labels=None):
     new_branch_name = f'backport/{pr.number}/to-{version}'
     backport_pr_title = f'[Backport {version}] {pr.title}'
     repo_url = f'https://yaronkaikov:{github_token}@github.com/{repo.full_name}.git'
@@ -112,7 +135,7 @@ def backport(repo, pr, version, commits, backport_base_branch):
                     repo_local.git.cherry_pick('--continue')
             repo_local.git.push(fork_repo, new_branch_name, force=True)
             create_pull_request(repo, new_branch_name, backport_base_branch, pr, backport_pr_title, commits,
-                                is_draft=is_draft)
+                                remaining_backport_labels, version, is_draft=is_draft)
         except GitCommandError as e:
             logging.warning(f"GitCommandError: {e}")
 
@@ -131,6 +154,23 @@ def create_pr_comment_and_remove_label(pr):
             pr.remove_from_labels(label)
     comment_body += f'\nPlease add the relevant backport labels after PR body is fixed'
     pr.create_issue_comment(comment_body)
+
+
+def sort_backport_labels_descending(backport_labels):
+    """
+    Sort backport labels in descending order (newest version first).
+    Example: ['backport/2025.1', 'backport/2025.3', 'backport/2025.2'] 
+    becomes ['backport/2025.3', 'backport/2025.2', 'backport/2025.1']
+    """
+    def extract_version(label):
+        # Extract version from backport/YYYY.X format
+        match = re.search(r'backport/(\d+)\.(\d+)', label)
+        if match:
+            year, minor = match.groups()
+            return (int(year), int(minor))
+        return (0, 0)  # fallback for malformed labels
+    
+    return sorted(backport_labels, key=extract_version, reverse=True)
 
 
 def main():
@@ -171,21 +211,58 @@ def main():
         if not backport_labels:
             print(f'no backport label: {pr.number}')
             continue
-        # Sort backport labels in descending version order (e.g., 2025.3 > 2025.2)
-        def version_key(label):
-            match = re.match(r'backport/(\d+)\.(\d+)$', label)
-            return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
-        backport_labels.sort(key=version_key, reverse=True)
-        # Only process the highest version backport label
-        backport_label = backport_labels[0]
-        version = backport_label.replace('backport/', '')
-        backport_base_branch = backport_label.replace('backport/', backport_branch)
+        
         commits = get_pr_commits(repo, pr, stable_branch, start_commit)
-        logging.info(f"Found PR #{pr.number} with commit {commits} and the following label: {backport_label}")
-        backport(repo, pr, version, commits, backport_base_branch)
-        # Remove the processed backport label to allow the next one to be handled automatically
-        # Note: The next backport will be triggered after this PR is merged/promoted by automation or workflow.
-        # Do NOT remove the backport label here; it should only be removed after promotion to branch-x.y.
+        logging.info(f"Found PR #{pr.number} with commit {commits} and the following labels: {backport_labels}")
+        
+        # Check if this is a backport PR by looking at the title pattern
+        is_backport_pr = pr.title.startswith('[Backport ') and '] ' in pr.title
+        
+        if is_backport_pr:
+            # Extract the version from the title: "[Backport 2025.3] Some title"
+            title_match = re.search(r'\[Backport ([^\]]+)\]', pr.title)
+            if title_match:
+                completed_version = title_match.group(1)
+                
+                # Find the original PR by looking for "Parent PR: #" in the body
+                parent_pr_match = re.search(r'Parent PR: #(\d+)', pr.body)
+                if parent_pr_match:
+                    parent_pr_number = int(parent_pr_match.group(1))
+                    try:
+                        parent_pr = repo.get_pull(parent_pr_number)
+                        done_label = f"backport/{completed_version}-done"
+                        try:
+                            parent_pr.add_to_labels(done_label)
+                            logging.info(f"Added {done_label} label to original PR #{parent_pr.number}")
+                        except GithubException as e:
+                            logging.warning(f"Failed to add {done_label} label to original PR: {e}")
+                    except GithubException as e:
+                        logging.warning(f"Failed to get parent PR #{parent_pr_number}: {e}")
+        
+        # Sort backport labels in descending order (newest version first)
+        sorted_backport_labels = sort_backport_labels_descending(backport_labels)
+        logging.info(f"Sorted backport labels: {sorted_backport_labels}")
+        
+        # For cascading backports, only process the newest version
+        # and add the remaining labels to the new backport PR
+        if len(sorted_backport_labels) > 1:
+            # Only create backport for the newest version
+            newest_backport_label = sorted_backport_labels[0]
+            remaining_labels = sorted_backport_labels[1:]  # Labels for older versions
+            
+            version = newest_backport_label.replace('backport/', '')
+            backport_base_branch = newest_backport_label.replace('backport/', backport_branch)
+            
+            logging.info(f"Creating cascading backport for version {version} with remaining labels: {remaining_labels}")
+            backport(repo, pr, version, commits, backport_base_branch, remaining_labels)
+        else:
+            # Single backport label - process normally
+            backport_label = sorted_backport_labels[0]
+            version = backport_label.replace('backport/', '')
+            backport_base_branch = backport_label.replace('backport/', backport_branch)
+            
+            logging.info(f"Creating single backport for version {version}")
+            backport(repo, pr, version, commits, backport_base_branch)
 
 
 if __name__ == "__main__":
