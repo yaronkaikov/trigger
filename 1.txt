@@ -10,7 +10,11 @@ This is a test for auto backport refactor
 Again another test
 Second test now
 And again
+<<<<<<< HEAD
 Third t
 ldka;dklsakdlsa;
 kjkldsfj
 ime now
+=======
+Third time now
+>>>>>>> 45041bb (wip)
