@@ -6,8 +6,8 @@ on:
       - master
       - next-*.*
   pull_request_target:
-    types: [labeled]
-    branches: [master, next]
+    types: [labeled, closed]
+    branches: [master, next, next-*.*]
 
 env:
   DEFAULT_BRANCH: 'master'
@@ -24,7 +24,7 @@ jobs:
           GITHUB_CONTEXT: ${{ toJson(github) }}
         run: echo "$GITHUB_CONTEXT"
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ github.repository }}
           ref: ${{ env.DEFAULT_BRANCH }}
@@ -58,27 +58,28 @@ jobs:
             echo "Label does not match the required pattern."
             echo "backport_label=false" >> $GITHUB_OUTPUT
           fi
-      - name: Log backport label processing order
-        run: |
-          echo "Backport labels on this PR:"
-          gh pr view ${{ github.event.pull_request.number }} --json labels -q ".labels[].name" | grep '^backport/' | sort -Vr
-          echo "Only the highest version backport label will be processed by the script."
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Run auto-backport.py when label was added
         if: github.event_name == 'pull_request_target' && steps.check_label.outputs.backport_label == 'true' && github.event.pull_request.state == 'closed'
         env:
           GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
         run: python .github/scripts/auto-backport.py --repo ${{ github.repository }} --base-branch ${{ github.ref }} --pull-request ${{ github.event.pull_request.number }} --head-commit ${{ github.event.pull_request.base.sha }} --label ${{ github.event.label.name }}
-      - name: Remove backport label after promotion
-        if: startsWith(github.ref, 'refs/heads/branch-')
+      # Handle waterfall backporting when a backport PR is merged
+      - name: Check if this is a merged backport PR
+        id: check_backport_pr
+        if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true
+        run: |
+          pr_title="${{ github.event.pull_request.title }}"
+          if [[ "$pr_title" =~ ^\[Backport[[:space:]][0-9]+\.[0-9]+\] ]]; then
+            echo "Is a backport PR"
+            echo "is_backport=true" >> $GITHUB_OUTPUT
+          else
+            echo "Not a backport PR"
+            echo "is_backport=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Process waterfall backport for merged backport PR
+        if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true && steps.check_backport_pr.outputs.is_backport == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
         run: |
-          version="${GITHUB_REF#refs/heads/branch-}"
-          label="backport/$version"
-          # Find PRs merged into this branch in the last 20 commits (adjust as needed)
-          for pr in $(gh pr list --state merged --base "branch-$version" --json number --jq '.[].number' | tail -n 20); do
-            echo "Removing label $label from PR #$pr"
-            gh pr edit "$pr" --remove-label "$label" || true
-          done
+          echo "Processing waterfall backport for merged PR #${{ github.event.pull_request.number }}"
+          python .github/scripts/auto-backport.py --repo ${{ github.repository }}

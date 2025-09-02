@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
 
-"""
-Auto-backport script for ScyllaDB
-
-This script implements cascading backports to reduce merge conflicts:
-- When a PR has multiple backport labels (e.g., backport/2025.3, backport/2025.2, backport/2025.1)
-- Only the newest version (2025.3) backport PR is created initially
-- The remaining backport labels (2025.2, 2025.1) are added to the new backport PR
-- When the newest backport PR is promoted, the process repeats for the next version
-- This ensures backports cascade from newer to older releases, minimizing conflicts
-- When a backport PR is successfully promoted/merged, a "done" label (e.g., backport/2025.3-done) 
-  is automatically added to the original PR to track completion status
-"""
-
 import argparse
 import os
 import re
@@ -35,6 +22,56 @@ def is_pull_request():
     return '--pull-request' in sys.argv[1:]
 
 
+def check_pr_merged(repo, pr_number):
+    """
+    Check if a PR is merged, and if so, return the PR object.
+    """
+    try:
+        pr = repo.get_pull(pr_number)
+        if pr.merged:
+            logging.info(f"PR #{pr_number} is merged")
+            return pr
+        else:
+            logging.info(f"PR #{pr_number} is not merged yet")
+            return None
+    except GithubException as e:
+        logging.error(f"Error checking PR #{pr_number}: {e}")
+        return None
+        
+        
+def find_merged_prs_with_labels(repo, backport_label_pattern):
+    """
+    Find merged PRs with backport labels.
+    Used for waterfall backporting to find PRs that need to be backported to the next version.
+    Returns a list of tuples (pr, backport_labels).
+    
+    For the waterfall process, we only need the most recently merged backport PR that still has
+    backport labels.
+    """
+    # Get recently merged PRs (last 20)
+    merged_prs = repo.get_pulls(state='closed', sort='updated', direction='desc')
+    count = 0
+    
+    for pr in merged_prs:
+        # Limit to last 20 PRs to avoid API rate limits
+        if count >= 20:
+            break
+            
+        if pr.merged:
+            count += 1
+            # Check if PR has backport labels
+            backport_labels = [label.name for label in pr.labels if backport_label_pattern.match(label.name)]
+            if backport_labels:
+                # Check if this is a backport PR (title starts with [Backport])
+                if pr.title.startswith('[Backport'):
+                    # For waterfall, we only need the most recent merged backport PR that still has backport labels
+                    # Return it immediately
+                    logging.info(f"Found merged backport PR #{pr.number} with labels: {backport_labels}")
+                    return [(pr, backport_labels)]
+            
+    return []
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--repo', type=str, required=True, help='Github repository name')
@@ -43,10 +80,12 @@ def parse_args():
     parser.add_argument('--pull-request', type=int, help='Pull request number to be backported')
     parser.add_argument('--head-commit', type=str, required=is_pull_request(), help='The HEAD of target branch after the pull request specified by --pull-request is merged')
     parser.add_argument('--label', type=str, required=is_pull_request(), help='Backport label name when --pull-request is defined')
+    parser.add_argument('--waterfall', action='store_true', help='Force waterfall backporting process')
+    parser.add_argument('--parallel', action='store_true', help='Force parallel backporting process')
     return parser.parse_args()
 
 
-def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr_title, commits, remaining_backport_labels=None, current_version=None, is_draft=False):
+def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr_title, commits, is_draft=False):
     pr_body = f'{pr.body}\n\n'
     for commit in commits:
         pr_body += f'- (cherry picked from commit {commit})\n\n'
@@ -55,32 +94,12 @@ def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr
         backport_pr = repo.create_pull(
             title=backport_pr_title,
             body=pr_body,
-            head=f'yaronkaikov:{new_branch_name}',
+            head=f'scylladbbot:{new_branch_name}',
             base=base_branch_name,
             draft=is_draft
         )
         logging.info(f"Pull request created: {backport_pr.html_url}")
         backport_pr.add_to_assignees(pr.user)
-        
-        # Add remaining backport labels to the new PR for cascading backports
-        if remaining_backport_labels:
-            for label in remaining_backport_labels:
-                try:
-                    backport_pr.add_to_labels(label)
-                    logging.info(f"Added label {label} to backport PR #{backport_pr.number}")
-                except GithubException as e:
-                    logging.warning(f"Failed to add label {label}: {e}")
-        
-        # Add version-specific promotion label for cascading backports
-        # For backport PRs, add promoted-to-{version} instead of promoted-to-master
-        if current_version:
-            version_promotion_label = f"promoted-to-{current_version}"
-            try:
-                backport_pr.add_to_labels(version_promotion_label)
-                logging.info(f"Added {version_promotion_label} label to backport PR #{backport_pr.number}")
-            except GithubException as e:
-                logging.warning(f"Failed to add {version_promotion_label} label: {e}")
-        
         if is_draft:
             backport_pr.add_to_labels("conflicts")
             pr_comment = f"@{pr.user.login} - This PR has conflicts, therefore it was moved to `draft` \n"
@@ -125,11 +144,11 @@ def get_pr_commits(repo, pr, stable_branch, start_commit=None):
     return commits
 
 
-def backport(repo, pr, version, commits, backport_base_branch, remaining_backport_labels=None):
+def backport(repo, pr, version, commits, backport_base_branch):
     new_branch_name = f'backport/{pr.number}/to-{version}'
     backport_pr_title = f'[Backport {version}] {pr.title}'
-    repo_url = f'https://yaronkaikov:{github_token}@github.com/{repo.full_name}.git'
-    fork_repo = f'https://yaronkaikov:{github_token}@github.com/yaronkaikov/{repo.name}.git'
+    repo_url = f'https://scylladbbot:{github_token}@github.com/{repo.full_name}.git'
+    fork_repo = f'https://scylladbbot:{github_token}@github.com/scylladbbot/{repo.name}.git'
     with (tempfile.TemporaryDirectory() as local_repo_path):
         try:
             repo_local = Repo.clone_from(repo_url, local_repo_path, branch=backport_base_branch)
@@ -145,7 +164,7 @@ def backport(repo, pr, version, commits, backport_base_branch, remaining_backpor
                     repo_local.git.cherry_pick('--continue')
             repo_local.git.push(fork_repo, new_branch_name, force=True)
             create_pull_request(repo, new_branch_name, backport_base_branch, pr, backport_pr_title, commits,
-                                remaining_backport_labels, version, is_draft=is_draft)
+                                is_draft=is_draft)
         except GitCommandError as e:
             logging.warning(f"GitCommandError: {e}")
 
@@ -166,21 +185,94 @@ def create_pr_comment_and_remove_label(pr):
     pr.create_issue_comment(comment_body)
 
 
-def sort_backport_labels_descending(backport_labels):
+def sort_versions(backport_labels):
     """
-    Sort backport labels in descending order (newest version first).
-    Example: ['backport/2025.1', 'backport/2025.3', 'backport/2025.2'] 
-    becomes ['backport/2025.3', 'backport/2025.2', 'backport/2025.1']
+    Sort backport labels by version numbers in descending order (newest first).
+    Example: ['backport/5.2', 'backport/5.0', 'backport/4.6'] -> ['backport/5.2', 'backport/5.0', 'backport/4.6']
     """
-    def extract_version(label):
-        # Extract version from backport/YYYY.X format
-        match = re.search(r'backport/(\d+)\.(\d+)', label)
-        if match:
-            year, minor = match.groups()
-            return (int(year), int(minor))
-        return (0, 0)  # fallback for malformed labels
+    def version_key(label):
+        # Extract version from label (e.g., 'backport/5.2' -> '5.2')
+        version = label.replace('backport/', '')
+        # Split version into components and convert to float for proper sorting
+        try:
+            parts = version.split('.')
+            if len(parts) == 1:
+                return (float(parts[0]), 0)
+            return (float(parts[0]), float(parts[1]))
+        except ValueError:
+            return (0, 0)  # Default for non-numeric versions
     
-    return sorted(backport_labels, key=extract_version, reverse=True)
+    return sorted(backport_labels, key=version_key, reverse=True)
+
+
+def waterfall_backport(repo, pr, sorted_backport_labels, commits, backport_branch_prefix):
+    """
+    Implements a waterfall backporting process.
+    Creates a backport PR for the latest version first, adding all remaining backport labels to it.
+    When that PR is merged, the next version in the waterfall will be handled.
+    
+    Example: If PR has labels backport/2025.3, backport/2025.2, and backport/2024.1
+    1. First backport to 2025.3, adding remaining labels to that PR
+    2. When that PR is merged, the script will be run again to backport to 2025.2
+    3. And so on
+    """
+    if not sorted_backport_labels:
+        return
+    
+    current_label = sorted_backport_labels[0]  # Get the latest version
+    remaining_labels = sorted_backport_labels[1:]  # Get the remaining versions for future backports
+    
+    version = current_label.replace('backport/', '')
+    backport_base_branch = current_label.replace('backport/', backport_branch_prefix)
+    
+    logging.info(f"Starting waterfall backport to {version}")
+    
+    # Create the backport PR
+    new_branch_name = f'backport/{pr.number}/to-{version}'
+    backport_pr_title = f'[Backport {version}] {pr.title}'
+    repo_url = f'https://scylladbbot:{github_token}@github.com/{repo.full_name}.git'
+    fork_repo = f'https://scylladbbot:{github_token}@github.com/scylladbbot/{repo.name}.git'
+    
+    with tempfile.TemporaryDirectory() as local_repo_path:
+        try:
+            repo_local = Repo.clone_from(repo_url, local_repo_path, branch=backport_base_branch)
+            repo_local.git.checkout(b=new_branch_name)
+            is_draft = False
+            for commit in commits:
+                try:
+                    repo_local.git.cherry_pick(commit, '-m1', '-x')
+                except GitCommandError as e:
+                    logging.warning(f'Cherry-pick conflict on commit {commit}: {e}')
+                    is_draft = True
+                    repo_local.git.add(A=True)
+                    repo_local.git.cherry_pick('--continue')
+            repo_local.git.push(fork_repo, new_branch_name, force=True)
+            
+            # Create PR
+            backport_pr = create_pull_request(repo, new_branch_name, backport_base_branch, pr, backport_pr_title, commits, is_draft=is_draft)
+            
+            if backport_pr and remaining_labels:
+                # Add remaining backport labels to the PR for the next backports in the waterfall
+                for label in remaining_labels:
+                    try:
+                        backport_pr.add_to_labels(label)
+                        logging.info(f"Added label {label} to PR #{backport_pr.number}")
+                    except Exception as e:
+                        logging.error(f"Failed to add label {label} to PR #{backport_pr.number}: {e}")
+                
+                # Add comment explaining the waterfall process
+                pr_comment = f"@{pr.user.login} - This PR needs to be backported to the following versions after merging:\n"
+                for label in remaining_labels:
+                    version_label = label.replace('backport/', '')
+                    pr_comment += f"- {version_label}\n\n"
+                
+                # Add explanation about automated waterfall backporting
+                pr_comment += f"The GitHub workflow will automatically continue the backport process to these versions after this PR is merged."
+                
+                backport_pr.create_issue_comment(pr_comment)
+                
+        except GitCommandError as e:
+            logging.warning(f"GitCommandError: {e}")
 
 
 def main():
@@ -195,6 +287,56 @@ def main():
 
     g = Github(github_token)
     repo = g.get_repo(repo_name)
+    
+    # If no specific PR is requested, look for merged PRs with backport labels to continue the waterfall process
+    if not args.pull_request and not args.parallel:
+        logging.info("Checking for merged PRs with backport labels to continue waterfall process...")
+        merged_prs_with_labels = find_merged_prs_with_labels(repo, backport_label_pattern)
+        
+        for pr, backport_labels in merged_prs_with_labels:
+            logging.info(f"Found merged backport PR #{pr.number} with backport labels: {backport_labels}")
+            
+            # Get the original PR number from the backport PR
+            parent_pr_match = re.search(r'Parent PR: #(\d+)', pr.body)
+            if parent_pr_match:
+                original_pr_number = int(parent_pr_match.group(1))
+                logging.info(f"Found original PR #{original_pr_number}")
+                
+                try:
+                    original_pr = repo.get_pull(original_pr_number)
+                    
+                    # Check if original PR has "backport_all" label
+                    original_labels = [label.name for label in original_pr.labels]
+                    has_backport_all = any(label == 'backport_all' for label in original_labels)
+                    
+                    # Extract the current version that was just processed
+                    current_version_match = re.search(r'\[Backport ([\d\.]+)\]', pr.title)
+                    if current_version_match:
+                        processed_version = current_version_match.group(1)
+                        logging.info(f"Processed version: {processed_version}")
+                        
+                        # Sort remaining labels by version
+                        sorted_backport_labels = sort_versions(backport_labels)
+                        
+                        # Get commits from the original PR
+                        commits = get_pr_commits(repo, original_pr, stable_branch)
+                        
+                        if has_backport_all and args.parallel:
+                            logging.info(f"PR #{original_pr_number} has 'backport_all' label, doing parallel backports")
+                            # Do parallel backports for remaining labels
+                            for backport_label in sorted_backport_labels:
+                                version = backport_label.replace('backport/', '')
+                                backport_base_branch = backport_label.replace('backport/', backport_branch)
+                                backport(repo, original_pr, version, commits, backport_base_branch)
+                        else:
+                            # Continue the waterfall with remaining labels
+                            waterfall_backport(repo, original_pr, sorted_backport_labels, commits, backport_branch)
+                except Exception as e:
+                    logging.error(f"Error processing PR #{pr.number}: {e}")
+        
+        # Exit after processing waterfall backports
+        return
+    
     closed_prs = []
     start_commit = None
 
@@ -212,88 +354,42 @@ def main():
     for pr in closed_prs:
         labels = [label.name for label in pr.labels]
         if args.pull_request:
-            # For --pull-request mode, get all backport labels from the actual PR
-            # instead of just using the single --label argument
-            backport_labels = [label for label in labels if backport_label_pattern.match(label)]
-            # If no backport labels found on PR, fall back to the --label argument
-            if not backport_labels and args.label:
-                backport_labels = [args.label]
+            backport_labels = [args.label]
         else:
             backport_labels = [label for label in labels if backport_label_pattern.match(label)]
-        
-        # Check if this is a backport PR by looking at the title pattern
-        is_backport_pr = pr.title.startswith('[Backport ') and '] ' in pr.title
-        
-        # For backport PRs, look for version-specific promotion labels
-        # For original PRs, look for the standard promoted-to-master label
-        has_promotion_label = False
-        if is_backport_pr:
-            # Extract version from title and look for promoted-to-{version} label
-            title_match = re.search(r'\[Backport ([^\]]+)\]', pr.title)
-            if title_match:
-                backport_version = title_match.group(1)
-                version_promotion_label = f"promoted-to-{backport_version}"
-                has_promotion_label = version_promotion_label in labels
-                logging.info(f"Looking for {version_promotion_label} label on backport PR #{pr.number}: {'found' if has_promotion_label else 'not found'}")
-        else:
-            # Original PR - look for promoted-to-master
-            has_promotion_label = promoted_label in labels
-        
-        if not has_promotion_label:
-            print(f'no promotion label: {pr.number}')
+        if promoted_label not in labels:
+            print(f'no {promoted_label} label: {pr.number}')
             continue
         if not backport_labels:
             print(f'no backport label: {pr.number}')
             continue
         
+        # Sort backport labels by version numbers (descending)
+        sorted_backport_labels = sort_versions(backport_labels)
+        logging.info(f"Sorted backport labels (newest first): {sorted_backport_labels}")
+        
         commits = get_pr_commits(repo, pr, stable_branch, start_commit)
-        logging.info(f"Found PR #{pr.number} with commit {commits} and the following labels: {backport_labels}")
+        logging.info(f"Found PR #{pr.number} with commits {commits} and the following labels: {sorted_backport_labels}")
         
-        if is_backport_pr:
-            # Extract the version from the title: "[Backport 2025.3] Some title"
-            title_match = re.search(r'\[Backport ([^\]]+)\]', pr.title)
-            if title_match:
-                completed_version = title_match.group(1)
-                
-                # Find the original PR by looking for "Parent PR: #" in the body
-                parent_pr_match = re.search(r'Parent PR: #(\d+)', pr.body)
-                if parent_pr_match:
-                    parent_pr_number = int(parent_pr_match.group(1))
-                    try:
-                        parent_pr = repo.get_pull(parent_pr_number)
-                        done_label = f"backport/{completed_version}-done"
-                        try:
-                            parent_pr.add_to_labels(done_label)
-                            logging.info(f"Added {done_label} label to original PR #{parent_pr.number}")
-                        except GithubException as e:
-                            logging.warning(f"Failed to add {done_label} label to original PR: {e}")
-                    except GithubException as e:
-                        logging.warning(f"Failed to get parent PR #{parent_pr_number}: {e}")
+        # Check if PR has "backport_all" label for parallel backporting
+        has_backport_all = any(label == 'backport_all' for label in labels)
         
-        # Sort backport labels in descending order (newest version first)
-        sorted_backport_labels = sort_backport_labels_descending(backport_labels)
-        logging.info(f"Sorted backport labels: {sorted_backport_labels}")
-        
-        # For cascading backports, only process the newest version
-        # and add the remaining labels to the new backport PR
-        if len(sorted_backport_labels) > 1:
-            # Only create backport for the newest version
-            newest_backport_label = sorted_backport_labels[0]
-            remaining_labels = sorted_backport_labels[1:]  # Labels for older versions
-            
-            version = newest_backport_label.replace('backport/', '')
-            backport_base_branch = newest_backport_label.replace('backport/', backport_branch)
-            
-            logging.info(f"Creating cascading backport for version {version} with remaining labels: {remaining_labels}")
-            backport(repo, pr, version, commits, backport_base_branch, remaining_labels)
+        # Determine backport strategy:
+        # 1. If --parallel flag is specified, always do parallel backports
+        # 2. If --waterfall flag is specified, always do waterfall backports
+        # 3. If PR has backport_all label, do parallel backports
+        # 4. Otherwise, default to waterfall backports
+        if args.parallel or (has_backport_all and not args.waterfall):
+            logging.info(f"Using parallel approach for PR #{pr.number} (backport_all label found: {has_backport_all})")
+            # Original approach - backport to all versions in parallel
+            for backport_label in sorted_backport_labels:
+                version = backport_label.replace('backport/', '')
+                backport_base_branch = backport_label.replace('backport/', backport_branch)
+                backport(repo, pr, version, commits, backport_base_branch)
         else:
-            # Single backport label - process normally
-            backport_label = sorted_backport_labels[0]
-            version = backport_label.replace('backport/', '')
-            backport_base_branch = backport_label.replace('backport/', backport_branch)
-            
-            logging.info(f"Creating single backport for version {version}")
-            backport(repo, pr, version, commits, backport_base_branch)
+            # Use waterfall approach
+            logging.info(f"Using waterfall approach for PR #{pr.number}")
+            waterfall_backport(repo, pr, sorted_backport_labels, commits, backport_branch)
 
 
 if __name__ == "__main__":
