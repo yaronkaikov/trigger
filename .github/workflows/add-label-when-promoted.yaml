@@ -43,7 +43,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
         run: python .github/scripts/search_commits.py  --commits ${{ github.event.before }}..${{ github.sha }} --repository ${{ github.repository }} --ref ${{ github.ref }}
       - name: Run auto-backport.py when promotion completed
-        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', env.DEFAULT_BRANCH)
+        if: github.event_name == 'push'
         env:
           GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
         run: python .github/scripts/auto-backport.py --repo ${{ github.repository }} --base-branch ${{ github.ref }} --commits ${{ github.event.before }}..${{ github.sha }}

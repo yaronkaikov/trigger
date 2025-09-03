@@ -53,11 +53,12 @@ def find_merged_prs_with_labels(repo, backport_label_pattern):
     count = 0
     
     for pr in merged_prs:
+        print([count, pr.number, pr.state])
         # Limit to last 20 PRs to avoid API rate limits
         if count >= 20:
             break
             
-        if pr.merged:
+        if pr.state == 'closed':
             count += 1
             # Check if PR has backport labels
             backport_labels = [label.name for label in pr.labels if backport_label_pattern.match(label.name)]
@@ -94,7 +95,7 @@ def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr
         backport_pr = repo.create_pull(
             title=backport_pr_title,
             body=pr_body,
-            head=f'scylladbbot:{new_branch_name}',
+            head=f'yaronkaikov:{new_branch_name}',
             base=base_branch_name,
             draft=is_draft
         )
@@ -146,9 +147,10 @@ def get_pr_commits(repo, pr, stable_branch, start_commit=None):
 
 def backport(repo, pr, version, commits, backport_base_branch):
     new_branch_name = f'backport/{pr.number}/to-{version}'
-    backport_pr_title = f'[Backport {version}] {pr.title}'
-    repo_url = f'https://scylladbbot:{github_token}@github.com/{repo.full_name}.git'
-    fork_repo = f'https://scylladbbot:{github_token}@github.com/scylladbbot/{repo.name}.git'
+    backport_pr_title = f'[Backport {version}] {re.sub(r'^\[Backport [\d\.]+\]\s*', '', pr.title)}'
+
+    repo_url = f'https://yaronkaikov:{github_token}@github.com/{repo.full_name}.git'
+    fork_repo = f'https://yaronkaikov:{github_token}@github.com/yaronkaikov/{repo.name}.git'
     with (tempfile.TemporaryDirectory() as local_repo_path):
         try:
             repo_local = Repo.clone_from(repo_url, local_repo_path, branch=backport_base_branch)
@@ -229,10 +231,9 @@ def waterfall_backport(repo, pr, sorted_backport_labels, commits, backport_branc
     
     # Create the backport PR
     new_branch_name = f'backport/{pr.number}/to-{version}'
-    backport_pr_title = f'[Backport {version}] {pr.title}'
-    repo_url = f'https://scylladbbot:{github_token}@github.com/{repo.full_name}.git'
-    fork_repo = f'https://scylladbbot:{github_token}@github.com/scylladbbot/{repo.name}.git'
-    
+    backport_pr_title = f'[Backport {version}] {re.sub(r'^\[Backport [\d\.]+\]\s*', '', pr.title)}'
+    repo_url = f'https://yaronkaikov:{github_token}@github.com/{repo.full_name}.git'
+    fork_repo = f'https://yaronkaikov:{github_token}@github.com/yaronkaikov/{repo.name}.git'
     with tempfile.TemporaryDirectory() as local_repo_path:
         try:
             repo_local = Repo.clone_from(repo_url, local_repo_path, branch=backport_base_branch)
@@ -292,50 +293,51 @@ def main():
     if not args.pull_request and not args.parallel:
         logging.info("Checking for merged PRs with backport labels to continue waterfall process...")
         merged_prs_with_labels = find_merged_prs_with_labels(repo, backport_label_pattern)
-        
-        for pr, backport_labels in merged_prs_with_labels:
-            logging.info(f"Found merged backport PR #{pr.number} with backport labels: {backport_labels}")
-            
-            # Get the original PR number from the backport PR
-            parent_pr_match = re.search(r'Parent PR: #(\d+)', pr.body)
-            if parent_pr_match:
-                original_pr_number = int(parent_pr_match.group(1))
-                logging.info(f"Found original PR #{original_pr_number}")
+        if merged_prs_with_labels:
+            for pr, backport_labels in merged_prs_with_labels:
+                logging.info(f"Found merged backport PR #{pr.number} with backport labels: {backport_labels}")
                 
-                try:
-                    original_pr = repo.get_pull(original_pr_number)
+                # Get the original PR number from the backport PR
+                parent_pr_match = re.search(r'Parent PR: #(\d+)', pr.body)
+                if parent_pr_match:
+                    original_pr_number = int(parent_pr_match.group(1))
+                    logging.info(f"Found original PR #{original_pr_number}")
                     
-                    # Check if original PR has "backport_all" label
-                    original_labels = [label.name for label in original_pr.labels]
-                    has_backport_all = any(label == 'backport_all' for label in original_labels)
-                    
-                    # Extract the current version that was just processed
-                    current_version_match = re.search(r'\[Backport ([\d\.]+)\]', pr.title)
-                    if current_version_match:
-                        processed_version = current_version_match.group(1)
-                        logging.info(f"Processed version: {processed_version}")
+                    try:
+                        original_pr = repo.get_pull(pr.number)
                         
-                        # Sort remaining labels by version
-                        sorted_backport_labels = sort_versions(backport_labels)
+                        # Check if original PR has "backport_all" label
+                        original_labels = [label.name for label in original_pr.labels]
+                        has_backport_all = any(label == 'backport_all' for label in original_labels)
                         
-                        # Get commits from the original PR
-                        commits = get_pr_commits(repo, original_pr, stable_branch)
-                        
-                        if has_backport_all and args.parallel:
-                            logging.info(f"PR #{original_pr_number} has 'backport_all' label, doing parallel backports")
-                            # Do parallel backports for remaining labels
-                            for backport_label in sorted_backport_labels:
-                                version = backport_label.replace('backport/', '')
-                                backport_base_branch = backport_label.replace('backport/', backport_branch)
-                                backport(repo, original_pr, version, commits, backport_base_branch)
-                        else:
-                            # Continue the waterfall with remaining labels
-                            waterfall_backport(repo, original_pr, sorted_backport_labels, commits, backport_branch)
-                except Exception as e:
-                    logging.error(f"Error processing PR #{pr.number}: {e}")
-        
-        # Exit after processing waterfall backports
-        return
+                        # Extract the current version that was just processed
+                        current_version_match = re.search(r'\[Backport ([\d\.]+)\]', pr.title)
+                        if current_version_match:
+                            processed_version = current_version_match.group(1)
+                            logging.info(f"Processed version: {processed_version}")
+                            
+                            # Sort remaining labels by version
+                            sorted_backport_labels = sort_versions(backport_labels)
+                            
+                            # Get commits from the original PR
+                            commits = get_pr_commits(repo, original_pr, stable_branch)
+                            logging.info(f"Found commits for original PR #{original_pr.number}: {commits}")
+
+                            if has_backport_all and args.parallel:
+                                logging.info(f"PR #{original_pr_number} has 'backport_all' label, doing parallel backports")
+                                # Do parallel backports for remaining labels
+                                for backport_label in sorted_backport_labels:
+                                    version = backport_label.replace('backport/', '')
+                                    backport_base_branch = backport_label.replace('backport/', backport_branch)
+                                    backport(repo, original_pr, version, commits, backport_base_branch)
+                            else:
+                                # Continue the waterfall with remaining labels
+                                waterfall_backport(repo, original_pr, sorted_backport_labels, commits, backport_branch)
+                    except Exception as e:
+                        logging.error(f"Error processing PR #{pr.number}: {e}")
+            
+            # Exit after processing waterfall backports
+            return
     
     closed_prs = []
     start_commit = None
