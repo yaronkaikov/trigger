@@ -53,13 +53,14 @@ def find_merged_prs_with_labels(repo, backport_label_pattern):
     count = 0
     
     for pr in merged_prs:
-        print([count, pr.number, pr.state])
         # Limit to last 20 PRs to avoid API rate limits
         if count >= 20:
             break
             
-        if pr.state == 'closed':
+        if pr.state == 'closed' and pr.merged:  # Make sure PR is both closed and merged
             count += 1
+            logging.info(f"Checking PR #{pr.number} ({count}/20): {pr.title}")
+            
             # Check if PR has backport labels
             backport_labels = [label.name for label in pr.labels if backport_label_pattern.match(label.name)]
             if backport_labels:
@@ -70,6 +71,7 @@ def find_merged_prs_with_labels(repo, backport_label_pattern):
                     logging.info(f"Found merged backport PR #{pr.number} with labels: {backport_labels}")
                     return [(pr, backport_labels)]
             
+    logging.info("No merged backport PRs with remaining backport labels found")
     return []
 
 
@@ -147,6 +149,8 @@ def get_pr_commits(repo, pr, stable_branch, start_commit=None):
 
 def backport(repo, pr, sorted_backport_labels, commits, backport_branch_prefix, use_waterfall=True):
     """   
+    Unified backport function that handles both waterfall and parallel backporting strategies.
+    
     Args:
         repo: GitHub repository object
         pr: Pull request object to backport
@@ -176,12 +180,15 @@ def backport(repo, pr, sorted_backport_labels, commits, backport_branch_prefix, 
         logging.info(f"Starting waterfall backport to {version}")
         
         # Create the backport PR using our helper function
+        # In waterfall mode, we ensure to pass the full commits list to include all changes
+        # including new files that might have been added
         backport_pr = create_backport_branch(
             repo=repo,
             pr=pr,
             version=version,
             commits=commits,
-            backport_branch_prefix=backport_branch_prefix
+            backport_branch_prefix=backport_branch_prefix,
+            remaining_labels=remaining_labels
         )
         
         if backport_pr and remaining_labels:
@@ -202,17 +209,23 @@ def backport(repo, pr, sorted_backport_labels, commits, backport_branch_prefix, 
             # Add explanation about automated waterfall backporting
             pr_comment += f"The GitHub workflow will automatically continue the backport process to these versions after this PR is merged."
             
-            backport_pr.create_issue_comment(pr_comment)
+            try:
+                backport_pr.create_issue_comment(pr_comment)
+                logging.info(f"Added explanation comment to PR #{backport_pr.number}")
+            except Exception as e:
+                logging.error(f"Failed to add comment to PR #{backport_pr.number}: {e}")
             
         if backport_pr:
             created_prs.append(backport_pr)
+            logging.info(f"Successfully created backport PR #{backport_pr.number} for version {version}")
+        else:
+            logging.warning(f"Failed to create backport PR for version {version} - no PR was returned")
     else:
         # Parallel strategy: Backport to all versions at once
         logging.info(f"Using parallel approach for PR #{pr.number}")
         
         for backport_label in sorted_backport_labels:
             version = backport_label.replace('backport/', '')
-            backport_base_branch = backport_label.replace('backport/', backport_branch_prefix)
             
             logging.info(f"Backporting PR #{pr.number} to version {version}")
             
@@ -228,8 +241,12 @@ def backport(repo, pr, sorted_backport_labels, commits, backport_branch_prefix, 
                 
                 if backport_pr:
                     created_prs.append(backport_pr)
+                    logging.info(f"Successfully created backport PR #{backport_pr.number} for version {version}")
+                else:
+                    logging.warning(f"No PR created for version {version} (possibly no changes detected)")
             except Exception as e:
                 logging.error(f"Error backporting to version {version}: {e}")
+                logging.exception(e)  # Log full stack trace for debugging
     
     return created_prs
 
@@ -289,18 +306,40 @@ def setup_git_repo(repo_url, fork_repo, backport_base_branch, new_branch_name, c
     is_draft = False
     
     try:
+        # Clone the repository and set up the new branch
         repo_local = Repo.clone_from(repo_url, local_repo_path, branch=backport_base_branch)
         repo_local.git.checkout(b=new_branch_name)
         
         for commit in commits:
             try:
+                # Use -x to add the original commit SHA in the message
+                # Use -m1 to pick the first parent's changes when cherry-picking a merge commit
+                # This is crucial for waterfall backporting where we're cherry-picking merge commits
                 repo_local.git.cherry_pick(commit, '-m1', '-x')
             except GitCommandError as e:
                 logging.warning(f'Cherry-pick conflict on commit {commit}: {e}')
                 is_draft = True
+                
+                # In case of conflicts, add all changes including untracked files
+                # This ensures new files added in previous commits are included
                 repo_local.git.add(A=True)
-                repo_local.git.cherry_pick('--continue')
+                
+                try:
+                    # Try to continue the cherry-pick
+                    repo_local.git.cherry_pick('--continue')
+                except GitCommandError as continue_error:
+                    # If cherry-pick --continue fails, check if it's because there are no changes
+                    # (common when cherry-picking merge commits that don't have actual changes)
+                    if "nothing to commit" in str(continue_error):
+                        logging.info(f"No changes to commit for {commit}, skipping")
+                        repo_local.git.cherry_pick('--skip')
+                    else:
+                        # For any other error, abort and mark as draft
+                        logging.error(f"Failed to continue cherry-pick: {continue_error}")
+                        repo_local.git.cherry_pick('--abort')
+                        break
         
+        # Push the changes to the fork repository
         repo_local.git.push(fork_repo, new_branch_name, force=True)
         return local_repo_path, is_draft
     
@@ -342,6 +381,27 @@ def create_backport_branch(repo, pr, version, commits, backport_branch_prefix, r
             new_branch_name, 
             commits
         )
+        
+        # Check if the branch has any changes compared to the target branch
+        # If not, don't create a PR as it would be empty
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                diff_repo = Repo.clone_from(repo_url, temp_dir, branch=backport_base_branch)
+                diff_repo.git.remote('add', 'fork', fork_repo)
+                diff_repo.git.fetch('fork', new_branch_name)
+                
+                # Get the diff between target branch and our new branch
+                # Include both changed files and new files in the diff
+                diff = diff_repo.git.diff(f'{backport_base_branch}..fork/{new_branch_name}', name_only=True)
+                
+                if not diff.strip():
+                    logging.info(f"No changes detected for version {version}, skipping PR creation")
+                    return None
+                else:
+                    logging.info(f"Changes detected for version {version}: {diff}")
+            except GitCommandError as e:
+                logging.warning(f"Error checking for changes: {e}")
+                # Continue anyway to be safe
         
         backport_pr = create_pull_request(
             repo, 
@@ -387,19 +447,10 @@ def main():
             for pr, backport_labels in merged_prs_with_labels:
                 logging.info(f"Found merged backport PR #{pr.number} with backport labels: {backport_labels}")
                 
-                # Get the original PR number from the backport PR
-                parent_pr_match = re.search(r'Parent PR: #(\d+)', pr.body)
-                if parent_pr_match:
-                    original_pr_number = int(parent_pr_match.group(1))
-                    logging.info(f"Found original PR #{original_pr_number}")
-                    
-                    try:
-                        original_pr = repo.get_pull(pr.number)
-                        
-                        # Check if original PR has "backport_all" label
-                        original_labels = [label.name for label in original_pr.labels]
-                        has_backport_all = any(label == 'backport_all' for label in original_labels)
-                        
+                # In waterfall backporting, we should cherry-pick from the last backport PR
+                try:
+                    # Check if the PR has been merged
+                    if pr.merged:
                         # Extract the current version that was just processed
                         current_version_match = re.search(r'\[Backport ([\d\.]+)\]', pr.title)
                         if current_version_match:
@@ -409,9 +460,39 @@ def main():
                             # Sort remaining labels by version
                             sorted_backport_labels = sort_versions(backport_labels)
                             
-                            # Get commits from the original PR
-                            commits = get_pr_commits(repo, original_pr, stable_branch)
-                            logging.info(f"Found commits for original PR #{original_pr.number}: {commits}")
+                            # Get the merge commit from the merged backport PR
+                            # This includes all conflict resolutions made during the previous backport
+                            commits = []
+                            if pr.merge_commit_sha:
+                                commits = [pr.merge_commit_sha]
+                                logging.info(f"Using merge commit from backport PR: {pr.merge_commit_sha}")
+                            else:
+                                # Fallback in case there's no merge commit
+                                logging.warning(f"No merge commit found for PR #{pr.number}, getting PR commits")
+                                commits = [commit.sha for commit in pr.get_commits()]
+                                
+                            if commits:
+                                logging.info(f"Found {len(commits)} commits for backporting to next version: {commits}")
+                            else:
+                                logging.warning(f"No commits found for backporting. This may cause the backport to fail.")
+                                
+                            # For UI display, also get the original PR information
+                            parent_pr_match = re.search(r'Parent PR: #(\d+)', pr.body)
+                            has_backport_all = False  # Default value
+                            
+                            if parent_pr_match:
+                                original_pr_number = int(parent_pr_match.group(1))
+                                logging.info(f"Original PR was #{original_pr_number}")
+                                try:
+                                    original_pr = repo.get_pull(original_pr_number)
+                                    # Check if original PR has "backport_all" label
+                                    original_labels = [label.name for label in original_pr.labels]
+                                    has_backport_all = any(label == 'backport_all' for label in original_labels)
+                                except Exception as e:
+                                    logging.error(f"Error fetching original PR #{original_pr_number}: {e}")
+                                    original_pr = pr  # Fallback to using the backport PR
+                            else:
+                                original_pr = pr
 
                             # Use parallel approach if PR has backport_all label, waterfall otherwise
                             use_waterfall = not has_backport_all
@@ -427,8 +508,8 @@ def main():
                                 backport_branch_prefix=backport_branch,
                                 use_waterfall=use_waterfall
                             )
-                    except Exception as e:
-                        logging.error(f"Error processing PR #{pr.number}: {e}")
+                except Exception as e:
+                    logging.error(f"Error processing PR #{pr.number}: {e}")
             
             # Exit after processing waterfall backports
             return
