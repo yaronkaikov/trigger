@@ -145,30 +145,93 @@ def get_pr_commits(repo, pr, stable_branch, start_commit=None):
     return commits
 
 
-def backport(repo, pr, version, commits, backport_base_branch):
-    new_branch_name = f'backport/{pr.number}/to-{version}'
-    backport_pr_title = f'[Backport {version}] {re.sub(r'^\[Backport [\d\.]+\]\s*', '', pr.title)}'
-
-    repo_url = f'https://yaronkaikov:{github_token}@github.com/{repo.full_name}.git'
-    fork_repo = f'https://yaronkaikov:{github_token}@github.com/yaronkaikov/{repo.name}.git'
-    with (tempfile.TemporaryDirectory() as local_repo_path):
-        try:
-            repo_local = Repo.clone_from(repo_url, local_repo_path, branch=backport_base_branch)
-            repo_local.git.checkout(b=new_branch_name)
-            is_draft = False
-            for commit in commits:
+def backport(repo, pr, sorted_backport_labels, commits, backport_branch_prefix, use_waterfall=True):
+    """   
+    Args:
+        repo: GitHub repository object
+        pr: Pull request object to backport
+        sorted_backport_labels: List of backport labels sorted by version (newest first)
+        commits: List of commits to cherry-pick
+        backport_branch_prefix: Prefix for the backport branch (e.g., 'next-')
+        use_waterfall: If True, use waterfall strategy; otherwise, use parallel strategy
+        
+    Returns:
+        List of created PR objects
+    """
+    if not sorted_backport_labels:
+        logging.info("No backport labels provided")
+        return []
+    
+    created_prs = []
+    
+    if use_waterfall:
+        # Waterfall strategy: Backport to latest version first with remaining labels attached
+        logging.info(f"Using waterfall approach for PR #{pr.number}")
+        
+        current_label = sorted_backport_labels[0]  # Get the latest version
+        remaining_labels = sorted_backport_labels[1:]  # Get the remaining versions for future backports
+        
+        version = current_label.replace('backport/', '')
+        
+        logging.info(f"Starting waterfall backport to {version}")
+        
+        # Create the backport PR using our helper function
+        backport_pr = create_backport_branch(
+            repo=repo,
+            pr=pr,
+            version=version,
+            commits=commits,
+            backport_branch_prefix=backport_branch_prefix
+        )
+        
+        if backport_pr and remaining_labels:
+            # Add remaining backport labels to the PR for the next backports in the waterfall
+            for label in remaining_labels:
                 try:
-                    repo_local.git.cherry_pick(commit, '-m1', '-x')
-                except GitCommandError as e:
-                    logging.warning(f'Cherry-pick conflict on commit {commit}: {e}')
-                    is_draft = True
-                    repo_local.git.add(A=True)
-                    repo_local.git.cherry_pick('--continue')
-            repo_local.git.push(fork_repo, new_branch_name, force=True)
-            create_pull_request(repo, new_branch_name, backport_base_branch, pr, backport_pr_title, commits,
-                                is_draft=is_draft)
-        except GitCommandError as e:
-            logging.warning(f"GitCommandError: {e}")
+                    backport_pr.add_to_labels(label)
+                    logging.info(f"Added label {label} to PR #{backport_pr.number}")
+                except Exception as e:
+                    logging.error(f"Failed to add label {label} to PR #{backport_pr.number}: {e}")
+            
+            # Add comment explaining the waterfall process
+            pr_comment = f"@{pr.user.login} - This PR needs to be backported to the following versions after merging:\n"
+            for label in remaining_labels:
+                version_label = label.replace('backport/', '')
+                pr_comment += f"- {version_label}\n\n"
+            
+            # Add explanation about automated waterfall backporting
+            pr_comment += f"The GitHub workflow will automatically continue the backport process to these versions after this PR is merged."
+            
+            backport_pr.create_issue_comment(pr_comment)
+            
+        if backport_pr:
+            created_prs.append(backport_pr)
+    else:
+        # Parallel strategy: Backport to all versions at once
+        logging.info(f"Using parallel approach for PR #{pr.number}")
+        
+        for backport_label in sorted_backport_labels:
+            version = backport_label.replace('backport/', '')
+            backport_base_branch = backport_label.replace('backport/', backport_branch_prefix)
+            
+            logging.info(f"Backporting PR #{pr.number} to version {version}")
+            
+            try:
+                # Create backport PR for this version
+                backport_pr = create_backport_branch(
+                    repo=repo,
+                    pr=pr,
+                    version=version,
+                    commits=commits,
+                    backport_branch_prefix=backport_branch_prefix
+                )
+                
+                if backport_pr:
+                    created_prs.append(backport_pr)
+            except Exception as e:
+                logging.error(f"Error backporting to version {version}: {e}")
+    
+    return created_prs
 
 
 def create_pr_comment_and_remove_label(pr):
@@ -207,73 +270,100 @@ def sort_versions(backport_labels):
     return sorted(backport_labels, key=version_key, reverse=True)
 
 
-def waterfall_backport(repo, pr, sorted_backport_labels, commits, backport_branch_prefix):
+def setup_git_repo(repo_url, fork_repo, backport_base_branch, new_branch_name, commits):
     """
-    Implements a waterfall backporting process.
-    Creates a backport PR for the latest version first, adding all remaining backport labels to it.
-    When that PR is merged, the next version in the waterfall will be handled.
+    Helper function to set up a local Git repository and cherry-pick commits.
     
-    Example: If PR has labels backport/2025.3, backport/2025.2, and backport/2024.1
-    1. First backport to 2025.3, adding remaining labels to that PR
-    2. When that PR is merged, the script will be run again to backport to 2025.2
-    3. And so on
+    Args:
+        repo_url: URL of the source repository
+        fork_repo: URL of the fork repository to push changes to
+        backport_base_branch: Base branch to create the backport from
+        new_branch_name: Name of the new branch to create
+        commits: List of commits to cherry-pick
+        
+    Returns:
+        tuple: (local_repo_path, is_draft) where local_repo_path is the path to the local repo
+               and is_draft indicates if there were conflicts during cherry-picking
     """
-    if not sorted_backport_labels:
-        return
+    local_repo_path = tempfile.mkdtemp()
+    is_draft = False
     
-    current_label = sorted_backport_labels[0]  # Get the latest version
-    remaining_labels = sorted_backport_labels[1:]  # Get the remaining versions for future backports
+    try:
+        repo_local = Repo.clone_from(repo_url, local_repo_path, branch=backport_base_branch)
+        repo_local.git.checkout(b=new_branch_name)
+        
+        for commit in commits:
+            try:
+                repo_local.git.cherry_pick(commit, '-m1', '-x')
+            except GitCommandError as e:
+                logging.warning(f'Cherry-pick conflict on commit {commit}: {e}')
+                is_draft = True
+                repo_local.git.add(A=True)
+                repo_local.git.cherry_pick('--continue')
+        
+        repo_local.git.push(fork_repo, new_branch_name, force=True)
+        return local_repo_path, is_draft
     
-    version = current_label.replace('backport/', '')
-    backport_base_branch = current_label.replace('backport/', backport_branch_prefix)
+    except GitCommandError as e:
+        logging.warning(f"GitCommandError during setup_git_repo: {e}")
+        return local_repo_path, True  # Return as draft if there was an error
+
+
+def create_backport_branch(repo, pr, version, commits, backport_branch_prefix, remaining_labels=None):
+    """
+    Creates a backport branch for a PR and cherry-picks the commits.
     
-    logging.info(f"Starting waterfall backport to {version}")
-    
-    # Create the backport PR
+    Args:
+        repo: GitHub repository object
+        pr: Pull request object to backport
+        version: Version to backport to (e.g., '5.2')
+        commits: List of commits to cherry-pick
+        backport_branch_prefix: Prefix for the backport branch (e.g., 'next-')
+        remaining_labels: List of remaining labels for waterfall backporting
+        
+    Returns:
+        The created PR object or None if creation failed
+    """
     new_branch_name = f'backport/{pr.number}/to-{version}'
-    backport_pr_title = f'[Backport {version}] {re.sub(r'^\[Backport [\d\.]+\]\s*', '', pr.title)}'
+    # First create the regex pattern and then use it in the f-string to avoid backslash issues
+    title_pattern = re.compile(r'^\[Backport [\d\.]+\]\s*')
+    clean_title = re.sub(title_pattern, '', pr.title)
+    backport_pr_title = f"[Backport {version}] {clean_title}"
+    backport_base_branch = f"{backport_branch_prefix}{version}"
+    
     repo_url = f'https://yaronkaikov:{github_token}@github.com/{repo.full_name}.git'
     fork_repo = f'https://yaronkaikov:{github_token}@github.com/yaronkaikov/{repo.name}.git'
-    with tempfile.TemporaryDirectory() as local_repo_path:
-        try:
-            repo_local = Repo.clone_from(repo_url, local_repo_path, branch=backport_base_branch)
-            repo_local.git.checkout(b=new_branch_name)
-            is_draft = False
-            for commit in commits:
-                try:
-                    repo_local.git.cherry_pick(commit, '-m1', '-x')
-                except GitCommandError as e:
-                    logging.warning(f'Cherry-pick conflict on commit {commit}: {e}')
-                    is_draft = True
-                    repo_local.git.add(A=True)
-                    repo_local.git.cherry_pick('--continue')
-            repo_local.git.push(fork_repo, new_branch_name, force=True)
-            
-            # Create PR
-            backport_pr = create_pull_request(repo, new_branch_name, backport_base_branch, pr, backport_pr_title, commits, is_draft=is_draft)
-            
-            if backport_pr and remaining_labels:
-                # Add remaining backport labels to the PR for the next backports in the waterfall
-                for label in remaining_labels:
-                    try:
-                        backport_pr.add_to_labels(label)
-                        logging.info(f"Added label {label} to PR #{backport_pr.number}")
-                    except Exception as e:
-                        logging.error(f"Failed to add label {label} to PR #{backport_pr.number}: {e}")
-                
-                # Add comment explaining the waterfall process
-                pr_comment = f"@{pr.user.login} - This PR needs to be backported to the following versions after merging:\n"
-                for label in remaining_labels:
-                    version_label = label.replace('backport/', '')
-                    pr_comment += f"- {version_label}\n\n"
-                
-                # Add explanation about automated waterfall backporting
-                pr_comment += f"The GitHub workflow will automatically continue the backport process to these versions after this PR is merged."
-                
-                backport_pr.create_issue_comment(pr_comment)
-                
-        except GitCommandError as e:
-            logging.warning(f"GitCommandError: {e}")
+    
+    try:
+        local_repo_path, is_draft = setup_git_repo(
+            repo_url, 
+            fork_repo, 
+            backport_base_branch, 
+            new_branch_name, 
+            commits
+        )
+        
+        backport_pr = create_pull_request(
+            repo, 
+            new_branch_name, 
+            backport_base_branch, 
+            pr, 
+            backport_pr_title, 
+            commits, 
+            is_draft=is_draft
+        )
+        
+        return backport_pr
+    
+    except Exception as e:
+        logging.error(f"Error creating backport branch: {e}")
+        return None
+    finally:
+        # Clean up temp directory if it exists
+        if 'local_repo_path' in locals() and os.path.exists(local_repo_path):
+            import shutil
+            shutil.rmtree(local_repo_path, ignore_errors=True)
+
 
 
 def main():
@@ -323,16 +413,20 @@ def main():
                             commits = get_pr_commits(repo, original_pr, stable_branch)
                             logging.info(f"Found commits for original PR #{original_pr.number}: {commits}")
 
-                            if has_backport_all and args.parallel:
+                            # Use parallel approach if PR has backport_all label, waterfall otherwise
+                            use_waterfall = not has_backport_all
+                            if has_backport_all:
                                 logging.info(f"PR #{original_pr_number} has 'backport_all' label, doing parallel backports")
-                                # Do parallel backports for remaining labels
-                                for backport_label in sorted_backport_labels:
-                                    version = backport_label.replace('backport/', '')
-                                    backport_base_branch = backport_label.replace('backport/', backport_branch)
-                                    backport(repo, original_pr, version, commits, backport_base_branch)
-                            else:
-                                # Continue the waterfall with remaining labels
-                                waterfall_backport(repo, original_pr, sorted_backport_labels, commits, backport_branch)
+                            
+                            # Call unified backport function with the appropriate strategy
+                            backport(
+                                repo=repo,
+                                pr=original_pr,
+                                sorted_backport_labels=sorted_backport_labels,
+                                commits=commits,
+                                backport_branch_prefix=backport_branch,
+                                use_waterfall=use_waterfall
+                            )
                     except Exception as e:
                         logging.error(f"Error processing PR #{pr.number}: {e}")
             
@@ -379,19 +473,19 @@ def main():
         # Determine backport strategy:
         # 1. If --parallel flag is specified, always do parallel backports
         # 2. If --waterfall flag is specified, always do waterfall backports
-        # 3. If PR has backport_all label, do parallel backports
+        # 3. If PR has backport_all label and --waterfall is not specified, do parallel backports
         # 4. Otherwise, default to waterfall backports
-        if args.parallel or (has_backport_all and not args.waterfall):
-            logging.info(f"Using parallel approach for PR #{pr.number} (backport_all label found: {has_backport_all})")
-            # Original approach - backport to all versions in parallel
-            for backport_label in sorted_backport_labels:
-                version = backport_label.replace('backport/', '')
-                backport_base_branch = backport_label.replace('backport/', backport_branch)
-                backport(repo, pr, version, commits, backport_base_branch)
-        else:
-            # Use waterfall approach
-            logging.info(f"Using waterfall approach for PR #{pr.number}")
-            waterfall_backport(repo, pr, sorted_backport_labels, commits, backport_branch)
+        use_waterfall = not (args.parallel or (has_backport_all and not args.waterfall))
+        
+        # Call the unified backport function with the appropriate strategy
+        backport(
+            repo=repo,
+            pr=pr,
+            sorted_backport_labels=sorted_backport_labels,
+            commits=commits,
+            backport_branch_prefix=backport_branch,
+            use_waterfall=use_waterfall
+        )
 
 
 if __name__ == "__main__":
