@@ -19,6 +19,10 @@ except KeyError:
 
 
 def is_pull_request():
+    """
+    Check if the script is running in pull request mode.
+    Returns True if --pull-request flag is present in the arguments.
+    """
     return '--pull-request' in sys.argv[1:]
 
 
@@ -81,11 +85,20 @@ def parse_args():
     parser.add_argument('--base-branch', type=str, default='refs/heads/next', help='Base branch')
     parser.add_argument('--commits', default=None, type=str, help='Range of promoted commits.')
     parser.add_argument('--pull-request', type=int, help='Pull request number to be backported')
-    parser.add_argument('--head-commit', type=str, required=is_pull_request(), help='The HEAD of target branch after the pull request specified by --pull-request is merged')
-    parser.add_argument('--label', type=str, required=is_pull_request(), help='Backport label name when --pull-request is defined')
+    parser.add_argument('--head-commit', type=str, required=is_pull_request() and not '--all-labels' in sys.argv, help='The HEAD of target branch after the pull request specified by --pull-request is merged')
+    parser.add_argument('--label', type=str, required=is_pull_request() and not '--all-labels' in sys.argv, help='Backport label name when --pull-request is defined')
+    parser.add_argument('--all-labels', action='store_true', help='Process all backport labels at once instead of just the one specified by --label')
     parser.add_argument('--waterfall', action='store_true', help='Force waterfall backporting process')
     parser.add_argument('--parallel', action='store_true', help='Force parallel backporting process')
-    return parser.parse_args()
+    
+    args = parser.parse_args()
+    
+    # Auto-set waterfall mode when using all-labels to ensure proper operation
+    if args.all_labels:
+        args.waterfall = True
+        logging.info("Setting waterfall mode automatically because --all-labels is specified")
+    
+    return args
 
 
 def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr_title, commits, is_draft=False):
@@ -428,6 +441,9 @@ def create_backport_branch(repo, pr, version, commits, backport_branch_prefix, r
 
 def main():
     args = parse_args()
+    # Log the arguments to help with debugging
+    logging.info(f"Starting auto-backport with arguments: {vars(args)}")
+    
     base_branch = args.base_branch.split('/')[2]
     promoted_label = 'promoted-to-master'
     repo_name = args.repo
@@ -530,13 +546,24 @@ def main():
 
     for pr in closed_prs:
         labels = [label.name for label in pr.labels]
+        
+        # Determine which backport labels to process
         if args.pull_request:
-            backport_labels = [args.label]
+            if args.all_labels:
+                # Process all backport labels on the PR at once
+                backport_labels = [label for label in labels if backport_label_pattern.match(label)]
+                logging.info(f"Processing all backport labels at once: {backport_labels}")
+            else:
+                # Process only the specific label that triggered the event
+                backport_labels = [args.label]
         else:
+            # For non-PR triggers (e.g., push events), process all backport labels
             backport_labels = [label for label in labels if backport_label_pattern.match(label)]
-        if promoted_label not in labels:
+            
+        if promoted_label not in labels and not args.all_labels:  # Skip this check for --all-labels since we're processing all labels anyway
             print(f'no {promoted_label} label: {pr.number}')
             continue
+            
         if not backport_labels:
             print(f'no backport label: {pr.number}')
             continue
@@ -554,9 +581,17 @@ def main():
         # Determine backport strategy:
         # 1. If --parallel flag is specified, always do parallel backports
         # 2. If --waterfall flag is specified, always do waterfall backports
-        # 3. If PR has backport_all label and --waterfall is not specified, do parallel backports
-        # 4. Otherwise, default to waterfall backports
-        use_waterfall = not (args.parallel or (has_backport_all and not args.waterfall))
+        # 3. If --all-labels flag is specified, force waterfall backporting to handle multiple labels correctly
+        # 4. If PR has backport_all label and --waterfall is not specified, do parallel backports
+        # 5. Otherwise, default to waterfall backports
+        use_waterfall = args.waterfall or args.all_labels or not (args.parallel or (has_backport_all and not args.waterfall))
+        
+        logging.info(f"Using backporting strategy: {'waterfall' if use_waterfall else 'parallel'}")
+        if use_waterfall:
+            logging.info(f"Waterfall strategy selected because: " + 
+                       (f"--waterfall flag specified" if args.waterfall else 
+                        f"--all-labels flag specified" if args.all_labels else 
+                        f"default behavior (no parallel or backport_all specified)"))
         
         # Call the unified backport function with the appropriate strategy
         backport(

@@ -1,3 +1,9 @@
+# Handles automatic backporting and label processing
+# 
+# This workflow works in conjunction with backport-coordinator.yaml to handle backport labels efficiently:
+# 1. When multiple backport labels are added, backport-coordinator.yaml collects them and triggers this workflow with workflow_dispatch
+# 2. This workflow then processes all labels in a single run, preventing duplicate backport operations
+# 3. The waterfall backporting feature properly handles cascading backports to multiple versions
 name: Check if commits are promoted
 
 on:
@@ -8,6 +14,15 @@ on:
   pull_request_target:
     types: [labeled, closed]
     branches: [master, next, next-*.*]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to backport'
+        required: true
+      action:
+        description: 'Action to perform (backport)'
+        required: true
+        default: 'backport'
 
 env:
   DEFAULT_BRANCH: 'master'
@@ -49,6 +64,7 @@ jobs:
         run: python .github/scripts/auto-backport.py --repo ${{ github.repository }} --base-branch ${{ github.ref }} --commits ${{ github.event.before }}..${{ github.sha }}
       - name: Check if label starts with 'backport/' and contains digits
         id: check_label
+        if: github.event_name == 'pull_request_target' && github.event.action == 'labeled'
         run: |
           label_name="${{ github.event.label.name }}"
           if [[ "$label_name" =~ ^backport/[0-9]+\.[0-9]+$ ]]; then
@@ -58,11 +74,51 @@ jobs:
             echo "Label does not match the required pattern."
             echo "backport_label=false" >> $GITHUB_OUTPUT
           fi
-      - name: Run auto-backport.py when label was added
+      
+      # Check if we should schedule a backport using a delay to group multiple label additions
+      - name: Check if we should schedule a backport
+        id: check_backport
         if: github.event_name == 'pull_request_target' && steps.check_label.outputs.backport_label == 'true' && github.event.pull_request.state == 'closed'
         env:
+          GH_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+        run: |
+          # Create a marker file to indicate a backport is pending
+          echo "Creating marker for PR #${{ github.event.pull_request.number }}"
+          echo "$(date +%s)" > /tmp/backport-${{ github.event.pull_request.number }}.pending
+          
+          # Schedule the backport to run after a delay (to group multiple label events)
+          echo "Scheduling backport for PR #${{ github.event.pull_request.number }} in 15 seconds"
+          echo "schedule_backport=true" >> $GITHUB_OUTPUT
+          
+          # Sleep for 15 seconds to collect any other label events that might come in
+          sleep 15
+          
+          # Check if we're the most recent process to update the marker file
+          file_time=$(cat /tmp/backport-${{ github.event.pull_request.number }}.pending)
+          current_time=$(date +%s)
+          time_diff=$((current_time - file_time))
+          
+          if [[ $time_diff -ge 14 ]]; then
+            # We're the last process to update the marker, so we can proceed with the backport
+            echo "This is the most recent label event (diff: $time_diff seconds), proceeding with backport"
+            echo "run_backport=true" >> $GITHUB_OUTPUT
+            rm /tmp/backport-${{ github.event.pull_request.number }}.pending
+          else
+            # Another process updated the marker after us, so we'll let it handle the backport
+            echo "A more recent label event exists (diff: $time_diff seconds), skipping this run"
+            echo "run_backport=false" >> $GITHUB_OUTPUT
+          fi
+      
+      # Run the actual backport command if this is the most recent process
+      - name: Run auto-backport.py when label was added
+        if: github.event_name == 'pull_request_target' && steps.check_backport.outputs.run_backport == 'true'
+        env:
           GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
-        run: python .github/scripts/auto-backport.py --repo ${{ github.repository }} --base-branch ${{ github.ref }} --pull-request ${{ github.event.pull_request.number }} --head-commit ${{ github.event.pull_request.base.sha }} --label ${{ github.event.label.name }}
+        run: |
+          echo "Running backport for PR #${{ github.event.pull_request.number }} with all labels"
+          # Run with --waterfall flag to ensure waterfall approach is used regardless of which label triggered the event
+          # Pass --all-labels flag to process all backport/* labels at once instead of just the triggering label
+          python .github/scripts/auto-backport.py --repo ${{ github.repository }} --base-branch ${{ github.ref }} --pull-request ${{ github.event.pull_request.number }} --head-commit ${{ github.event.pull_request.base.sha }} --waterfall --all-labels
       # Handle waterfall backporting when a backport PR is merged
       - name: Check if this is a merged backport PR
         id: check_backport_pr
@@ -83,3 +139,12 @@ jobs:
         run: |
           echo "Processing waterfall backport for merged PR #${{ github.event.pull_request.number }}"
           python .github/scripts/auto-backport.py --repo ${{ github.repository }}
+          
+      # Handle workflow_dispatch events for manual backport triggering
+      - name: Run backport for workflow_dispatch event
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'backport'
+        env:
+          GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+        run: |
+          echo "Processing manual backport for PR #${{ github.event.inputs.pr_number }}"
+          python .github/scripts/auto-backport.py --repo ${{ github.repository }} --pull-request ${{ github.event.inputs.pr_number }} --waterfall --all-labels
