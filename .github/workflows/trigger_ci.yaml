@@ -1,6 +1,16 @@
 name: Trigger next gating
 
 on:
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: 'Base commit SHA'
+        required: true
+        type: string
+      head_sha:
+        description: 'Head commit SHA'
+        required: true
+        type: string
   pull_request_target:
     types: [opened, reopened, synchronize]
     
@@ -12,6 +22,19 @@ jobs:
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}
         run: echo "$GITHUB_CONTEXT"
+      - name: Checkout PR code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Needed to access full history
+
+      - name: Get base and head SHAs
+        run: |
+          echo "Base SHA: ${{ github.event.pull_request.base.sha }}"
+          echo "Head SHA: ${{ github.event.pull_request.head.sha }}"
+
+      - name: List changed files between SHAs
+        run: |
+          git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
       # - name: Determine Jenkins Job Name
       #   run: |
       #     if [[ "${{ github.ref_name }}" == "next" ]]; then
