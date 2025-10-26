@@ -28,34 +28,31 @@ jobs:
           fetch-depth: 0  # Needed to access full history
           ref: ${{ github.event.pull_request.head.ref }}
 
-      - name: Compare before and after SHAs
-        if: github.event.action == 'synchronize'
-        run: |
-          
-          echo "Before SHA: ${{ github.event.before }}"
-          echo "After SHA:  ${{ github.event.after }}"
-
-          TREE_BEFORE=$(git show -s --format=%T HEAD^)
-          TREE_AFTER=$(git show -s --format=%T HEAD)
-
-          MSG_BEFORE=$(git log --format=%B -n 1 HEAD^)
-          MSG_AFTER=$(git log --format=%B -n 1 HEAD)
-
-          echo "Tree Before: $TREE_BEFORE"
-          echo "Tree After:  $TREE_AFTER"
-
-          if [ "$TREE_BEFORE" = "$TREE_AFTER" ]; then
-            echo "✅ File contents are identical."
-            if [ "$MSG_BEFORE" != "$MSG_AFTER" ]; then
-              echo "✏️ Only the commit message changed."
-            else
-              echo "🔍 No visible changes between commits."
-            fi
-          else
-            echo "⚠️ File contents changed between pushes."
-          fi
+      - name: Compare commits for file changes
         env:
-          GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Base: ${{ github.event.before }}"
+          echo "Head: ${{ github.event.after }}"
+
+          # Use GitHub API to compare commits
+          curl -s \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/compare/${{ github.event.before }}...${{ github.event.after }} \
+            > compare.json
+
+          # Check if files array is empty
+          FILE_COUNT=$(jq '.files | length' compare.json)
+          echo "Changed files: $FILE_COUNT"
+
+          if [ "$FILE_COUNT" -eq "0" ]; then
+            echo "✅ No file changes detected."
+          else
+            echo "🚨 File changes detected!"
+            jq '.files[].filename' compare.json
+            exit 1  # Optional: fail the job if changes are detected
+          fi
 
       - name: Rule 1 - Check PR draft or conflict status
         run: |
