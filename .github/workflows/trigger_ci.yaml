@@ -27,13 +27,11 @@ jobs:
         with:
           fetch-depth: 0  # Needed to access full history
 
-      - name: Fetch full PR branch and base
-        run: |
-          git fetch --all
-
       - name: Compare before and after SHAs
         if: github.event.action == 'synchronize'
         run: |
+          gh pr checkout ${{ github.event.number }}
+          git fetch --all
           echo "Before SHA: ${{ github.event.before }}"
           echo "After SHA:  ${{ github.event.after }}"
 
@@ -56,6 +54,8 @@ jobs:
           else
             echo "⚠️ File contents changed between pushes."
           fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
 
       - name: Rule 1 - Check PR draft or conflict status
         run: |
