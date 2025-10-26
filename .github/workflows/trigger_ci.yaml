@@ -26,7 +26,9 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 0  # Needed to access full history
+          ref: ${{ github.event.pull_request.head.ref }}
 
+<<<<<<< Updated upstream
       - name: Fetch full history
         run: git fetch --all
 
@@ -56,7 +58,42 @@ jobs:
           else
             echo "⚠️ File contents changed between pushes."
           fi
+=======
+      - name: Fetch full PR branch and base
+        run: |
+          git fetch origin ${{ github.event.pull_request.head.ref }}
+          git fetch origin ${{ github.event.pull_request.base.ref }}
 
+      - name: Compare before and after SHAs
+        if: github.event.action == 'synchronize'
+        run: |
+          echo "Before SHA: ${{ github.event.before }}"
+          echo "After SHA:  ${{ github.event.after }}"
+>>>>>>> Stashed changes
+
+          # Ensure both SHAs are available
+          git cat-file -e ${{ github.event.before }} || git fetch origin ${{ github.event.pull_request.head.ref }}
+          git cat-file -e ${{ github.event.after }} || git fetch origin ${{ github.event.pull_request.head.ref }}
+
+          TREE_BEFORE=$(git show -s --format=%T ${{ github.event.before }})
+          TREE_AFTER=$(git show -s --format=%T ${{ github.event.after }})
+
+          MSG_BEFORE=$(git log --format=%B -n 1 ${{ github.event.before }})
+          MSG_AFTER=$(git log --format=%B -n 1 ${{ github.event.after }})
+
+          echo "Tree Before: $TREE_BEFORE"
+          echo "Tree After:  $TREE_AFTER"
+
+          if [ "$TREE_BEFORE" = "$TREE_AFTER" ]; then
+            echo "✅ File contents are identical."
+            if [ "$MSG_BEFORE" != "$MSG_AFTER" ]; then
+              echo "✏️ Only the commit message changed."
+            else
+              echo "🔍 No visible changes between commits."
+            fi
+          else
+            echo "⚠️ File contents changed between pushes."
+          fi
       - name: Rule 1 - Check PR draft or conflict status
         run: |
           # Check if PR is in draft mode
