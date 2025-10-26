@@ -35,6 +35,136 @@ jobs:
       - name: List changed files between SHAs
         run: |
           git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
+
+      - name: Rule 1 - Check PR draft or conflict status
+        run: |
+          # Check if PR is in draft mode
+          IS_DRAFT="${{ github.event.pull_request.draft }}"
+          
+          # Check if PR has 'conflict' label
+          HAS_CONFLICT_LABEL="false"
+          LABELS='${{ toJson(github.event.pull_request.labels) }}'
+          if echo "$LABELS" | jq -r '.[].name' | grep -q "^conflict$"; then
+            HAS_CONFLICT_LABEL="true"
+          fi
+          
+          # Set draft_or_conflict variable
+          if [[ "$IS_DRAFT" == "true" || "$HAS_CONFLICT_LABEL" == "true" ]]; then
+            echo "draft_or_conflict=true" >> $GITHUB_ENV
+            echo "✅ Rule 1: PR is in draft mode or has conflict label - setting draft_or_conflict=true"
+          else
+            echo "draft_or_conflict=false" >> $GITHUB_ENV
+            echo "✅ Rule 1: PR is ready and has no conflict label - setting draft_or_conflict=false"
+          fi
+          
+          echo "Draft status: $IS_DRAFT"
+          echo "Has conflict label: $HAS_CONFLICT_LABEL"
+          echo "Result: draft_or_conflict = $draft_or_conflict"
+
+      - name: Rule 2 - Check P0/P1 priority labels and add force_on_cloud label
+        run: |
+          # Check if PR has P0 or P1 labels
+          HAS_P0_P1_LABEL="false"
+          LABELS='${{ toJson(github.event.pull_request.labels) }}'
+          if echo "$LABELS" | jq -r '.[].name' | grep -E "^(P0|P1)$" > /dev/null; then
+            HAS_P0_P1_LABEL="true"
+          fi
+          
+          # Check if PR already has force_on_cloud label
+          HAS_FORCE_ON_CLOUD_LABEL="false"
+          if echo "$LABELS" | jq -r '.[].name' | grep -q "^force_on_cloud$"; then
+            HAS_FORCE_ON_CLOUD_LABEL="true"
+          fi
+          
+          echo "Has P0/P1 label: $HAS_P0_P1_LABEL"
+          echo "Has force_on_cloud label: $HAS_FORCE_ON_CLOUD_LABEL"
+          
+          # Add force_on_cloud label if PR has P0/P1 and doesn't already have force_on_cloud
+          if [[ "$HAS_P0_P1_LABEL" == "true" && "$HAS_FORCE_ON_CLOUD_LABEL" == "false" ]]; then
+            echo "✅ Rule 2: PR has P0 or P1 label - adding force_on_cloud label"
+            curl -X POST \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels" \
+              -d '{"labels":["force_on_cloud"]}'
+          elif [[ "$HAS_P0_P1_LABEL" == "true" && "$HAS_FORCE_ON_CLOUD_LABEL" == "true" ]]; then
+            echo "✅ Rule 2: PR has P0 or P1 label and already has force_on_cloud label - no action needed"
+          else
+            echo "✅ Rule 2: PR does not have P0 or P1 label - no force_on_cloud label needed"
+          fi
+
+      - name: Rule 3 - Analyze changed files and set build requirements
+        run: |
+          # Get list of changed files
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }})
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+          echo ""
+          
+          # Initialize all requirements to false
+          REQUIRE_BUILD="false"
+          REQUIRE_DTEST="false"
+          REQUIRE_UNITTEST="false"
+          REQUIRE_ARTIFACTS="false"
+          REQUIRE_SCYLLA_GDB="false"
+          
+          # Check each file against patterns
+          while IFS= read -r file; do
+            if [[ -n "$file" ]]; then
+              echo "Checking file: $file"
+              
+              # Build pattern: ^(?!scripts\/pull_github_pr.sh).*$
+              # Everything except scripts/pull_github_pr.sh
+              if [[ "$file" != "scripts/pull_github_pr.sh" ]]; then
+                REQUIRE_BUILD="true"
+                echo "  ✓ Matches build pattern"
+              fi
+              
+              # Dtest pattern: ^(?!test(.py|\/)|dist\/docker\/|dist\/common\/scripts\/).*$
+              # Everything except test files, dist/docker/, dist/common/scripts/
+              if [[ ! "$file" =~ ^test\.(py|/).*$ ]] && [[ ! "$file" =~ ^dist/docker/.*$ ]] && [[ ! "$file" =~ ^dist/common/scripts/.*$ ]]; then
+                REQUIRE_DTEST="true"
+                echo "  ✓ Matches dtest pattern"
+              fi
+              
+              # Unittest pattern: ^(?!dist\/docker\/|dist\/common\/scripts).*$
+              # Everything except dist/docker/, dist/common/scripts/
+              if [[ ! "$file" =~ ^dist/docker/.*$ ]] && [[ ! "$file" =~ ^dist/common/scripts.*$ ]]; then
+                REQUIRE_UNITTEST="true"
+                echo "  ✓ Matches unittest pattern"
+              fi
+              
+              # Artifacts pattern: ^(?:dist|tools\/toolchain).*$
+              # Files starting with dist or tools/toolchain
+              if [[ "$file" =~ ^dist.*$ ]] || [[ "$file" =~ ^tools/toolchain.*$ ]]; then
+                REQUIRE_ARTIFACTS="true"
+                echo "  ✓ Matches artifacts pattern"
+              fi
+              
+              # Scylla GDB pattern: ^(scylla-gdb.py).*$
+              # Files starting with scylla-gdb.py
+              if [[ "$file" =~ ^scylla-gdb\.py.*$ ]]; then
+                REQUIRE_SCYLLA_GDB="true"
+                echo "  ✓ Matches scylla_gdb pattern"
+              fi
+            fi
+          done <<< "$CHANGED_FILES"
+          
+          # Set environment variables
+          echo "requireBuild=$REQUIRE_BUILD" >> $GITHUB_ENV
+          echo "requireDtest=$REQUIRE_DTEST" >> $GITHUB_ENV
+          echo "requireUnittest=$REQUIRE_UNITTEST" >> $GITHUB_ENV
+          echo "requireArtifacts=$REQUIRE_ARTIFACTS" >> $GITHUB_ENV
+          echo "requireScyllaGdb=$REQUIRE_SCYLLA_GDB" >> $GITHUB_ENV
+          
+          echo ""
+          echo "✅ Rule 3: File analysis complete"
+          echo "Build required: $REQUIRE_BUILD"
+          echo "Dtest required: $REQUIRE_DTEST"
+          echo "Unittest required: $REQUIRE_UNITTEST"
+          echo "Artifacts required: $REQUIRE_ARTIFACTS"
+          echo "Scylla GDB required: $REQUIRE_SCYLLA_GDB"
+
       # - name: Determine Jenkins Job Name
       #   run: |
       #     if [[ "${{ github.ref_name }}" == "next" ]]; then
