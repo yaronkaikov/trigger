@@ -27,16 +27,21 @@ jobs:
         with:
           fetch-depth: 0  # Needed to access full history
 
-      - name: Get base and head SHAs
-        if: github.event.action == 'opened' || github.event.action == 'reopened'
-        run: |
-          echo "Base SHA: ${{ github.event.pull_request.base.sha }}"
-          echo "Head SHA: ${{ github.event.pull_request.head.sha }}"
-          git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
-      - name: Get diff for synchronize action
+      - name: Check if only commit message changed (to avoid triggering CI unnecessarily)
         if: github.event.action == 'synchronize'
         run: |
-          git diff --name-only ${{ github.event.before }} ${{ github.event.after }}
+          TREE1=$(git show -s --format=%T ${{ inputs.sha1 }})
+          TREE2=$(git show -s --format=%T ${{ inputs.sha2 }})
+
+          MSG1=$(git log --format=%B -n 1 ${{ inputs.sha1 }})
+          MSG2=$(git log --format=%B -n 1 ${{ inputs.sha2 }})
+
+          if [ "$TREE1" = "$TREE2" ] && [ "$MSG1" != "$MSG2" ]; then
+            echo "Only the commit message changed."
+          else
+            echo "Other changes detected."
+          fi
+
       - name: Rule 1 - Check PR draft or conflict status
         run: |
           # Check if PR is in draft mode
