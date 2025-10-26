@@ -62,6 +62,7 @@ jobs:
           else
             echo "⚠️ File contents changed between pushes."
           fi
+
       - name: Rule 1 - Check PR draft or conflict status
         run: |
           # Check if PR is in draft mode
