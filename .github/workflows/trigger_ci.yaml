@@ -30,18 +30,13 @@ jobs:
 
       - name: Fetch full PR branch and base
         run: |
-          git fetch origin ${{ github.event.pull_request.head.ref }}
-          git fetch origin ${{ github.event.pull_request.base.ref }}
+          git fetch --all
 
       - name: Compare before and after SHAs
         if: github.event.action == 'synchronize'
         run: |
           echo "Before SHA: ${{ github.event.before }}"
           echo "After SHA:  ${{ github.event.after }}"
-
-          # Ensure both SHAs are available
-          git cat-file -e ${{ github.event.before }} || git fetch origin ${{ github.event.pull_request.head.ref }}
-          git cat-file -e ${{ github.event.after }} || git fetch origin ${{ github.event.pull_request.head.ref }}
 
           TREE_BEFORE=$(git show -s --format=%T ${{ github.event.before }})
           TREE_AFTER=$(git show -s --format=%T ${{ github.event.after }})
