@@ -28,14 +28,15 @@ jobs:
           fetch-depth: 0  # Needed to access full history
 
       - name: Get base and head SHAs
+        if: github.event.action == 'opened' || github.event.action == 'reopened'
         run: |
           echo "Base SHA: ${{ github.event.pull_request.base.sha }}"
           echo "Head SHA: ${{ github.event.pull_request.head.sha }}"
-
-      - name: List changed files between SHAs
-        run: |
           git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
-
+      - name: Get diff for synchronize action
+        if: github.event.action == 'synchronize'
+        run: |
+          git diff --name-only ${{ github.event.before }} ${{ github.event.after }}
       - name: Rule 1 - Check PR draft or conflict status
         run: |
           # Check if PR is in draft mode
