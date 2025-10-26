@@ -28,6 +28,13 @@ jobs:
           fetch-depth: 0  # Needed to access full history
           ref: ${{ github.event.pull_request.head.ref }}
 
+      - name: Fetch before commit if needed
+        run: |
+          if ! git cat-file -e ${{ github.event.before }} 2>/dev/null; then
+            echo "Fetching before commit ${{ github.event.before }}"
+            git fetch --depth=1 origin ${{ github.event.before }}
+          fi
+
       - name: Compare commits for file changes
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -37,6 +44,19 @@ jobs:
 
           TREE_BEFORE=$(git show -s --format=%T ${{ github.event.before }})
           TREE_AFTER=$(git show -s --format=%T ${{ github.event.after }})
+          
+          echo "TREE_BEFORE=$TREE_BEFORE" >> $GITHUB_ENV
+          echo "TREE_AFTER=$TREE_AFTER" >> $GITHUB_ENV
+
+      - name: Check if last push has file changes
+        run: |
+          if [[ "${{ env.TREE_BEFORE }}" == "${{ env.TREE_AFTER }}" ]]; then
+            echo "No file changes detected in the last push, only commit message edit."
+            echo "has_file_changes=false" >> $GITHUB_ENV
+          else
+            echo "File changes detected in the last push."
+            echo "has_file_changes=true" >> $GITHUB_ENV
+          fi
 
       - name: Rule 1 - Check PR draft or conflict status
         run: |
