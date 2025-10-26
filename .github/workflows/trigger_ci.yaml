@@ -30,16 +30,16 @@ jobs:
       - name: Check if only commit message changed (to avoid triggering CI unnecessarily)
         if: github.event.action == 'synchronize'
         run: |
-          TREE1=$(git show -s --format=%T ${{ inputs.sha1 }})
-          TREE2=$(git show -s --format=%T ${{ inputs.sha2 }})
+          echo "Before SHA: ${{ github.event.before }}"
+          echo "After SHA:  ${{ github.event.after }}"
 
-          MSG1=$(git log --format=%B -n 1 ${{ inputs.sha1 }})
-          MSG2=$(git log --format=%B -n 1 ${{ inputs.sha2 }})
+          TREE_BEFORE=$(git show -s --format=%T ${{ github.event.before }})
+          TREE_AFTER=$(git show -s --format=%T ${{ github.event.after }})
 
-          if [ "$TREE1" = "$TREE2" ] && [ "$MSG1" != "$MSG2" ]; then
-            echo "Only the commit message changed."
+          if [ "$TREE_BEFORE" = "$TREE_AFTER" ]; then
+            echo "✅ Only metadata (e.g., commit message) changed."
           else
-            echo "Other changes detected."
+            echo "⚠️ File contents changed between pushes."
           fi
 
       - name: Rule 1 - Check PR draft or conflict status
